@@ -1,0 +1,14 @@
+# Compiled binary
+/zuelose
+/musig
+
+# Go
+/vendor/
+/go.work
+/go.work.sum
+
+# Test artifacts
+coverage.out
+*.test
+
+

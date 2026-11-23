@@ -1,0 +1,270 @@
+package app
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/daum3ns/zuelose/internal/player"
+	"github.com/daum3ns/zuelose/internal/podcast"
+	"github.com/daum3ns/zuelose/internal/store"
+	"github.com/daum3ns/zuelose/internal/ui"
+)
+
+type fakePlayer struct {
+	played   []player.Media
+	paused   bool
+	volume   int
+	started  bool
+}
+
+func (f *fakePlayer) Start() error                       { f.started = true; return nil }
+func (f *fakePlayer) Play(m player.Media)                { f.played = append(f.played, m) }
+func (f *fakePlayer) Stop()                              {}
+func (f *fakePlayer) TogglePause()                       { f.paused = !f.paused }
+func (f *fakePlayer) VolumeUp()                          { f.volume += 5 }
+func (f *fakePlayer) VolumeDown()                        { f.volume -= 5 }
+func (f *fakePlayer) SetVolume(v int)                    { f.volume = v }
+
+type fakeRadio struct {
+	results []store.Station
+}
+
+func (f *fakeRadio) Search(ctx context.Context, name string, limit int) ([]store.Station, error) {
+	return f.results, nil
+}
+
+func newTestModel() (model, *fakePlayer, *fakeRadio) {
+	fp := &fakePlayer{}
+	fr := &fakeRadio{}
+	m := NewModel(store.DefaultConfig(), store.Favourites{}, fp, fr)
+	m = updateModel(m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	return m, fp, fr
+}
+
+func updateModel(m model, msg tea.Msg) model {
+	newM, _ := m.Update(msg)
+	return newM.(model)
+}
+
+func activate(m model, v view) model {
+	newM, _ := m.activateView(v)
+	return newM.(model)
+}
+
+func TestFormatDuration(t *testing.T) {
+	cases := []struct {
+		in   int
+		want string
+	}{
+		{0, "?"},
+		{-1, "?"},
+		{45, "0:45"},
+		{125, "2:05"},
+		{3661, "1:01:01"},
+	}
+	for _, c := range cases {
+		if got := formatDuration(c.in); got != c.want {
+			t.Errorf("formatDuration(%d) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFormatDate(t *testing.T) {
+	if got := formatDate(time.Time{}); got != "?" {
+		t.Errorf("expected ?, got %q", got)
+	}
+	d := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+	if got := formatDate(d); got != "2024-01-15" {
+		t.Errorf("expected 2024-01-15, got %q", got)
+	}
+}
+
+func TestMergeEpisodesPreservesState(t *testing.T) {
+	existing := []podcast.Episode{{
+		URL:       "http://ep1",
+		Position:  120,
+		Played:    true,
+		Completed: false,
+		IsNew:     false,
+	}}
+	fetched := []podcast.Episode{{
+		URL:      "http://ep1",
+		Duration: 300,
+	}, {
+		URL:      "http://ep2",
+		Duration: 200,
+	}}
+
+	merged := mergeEpisodes(fetched, existing)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 episodes, got %d", len(merged))
+	}
+	if merged[0].Position != 120 || !merged[0].Played || merged[0].Completed {
+		t.Fatalf("state not preserved: %+v", merged[0])
+	}
+	if !merged[1].IsNew {
+		t.Fatalf("new episode should be marked IsNew: %+v", merged[1])
+	}
+}
+
+func TestBuildNewEpisodeItems(t *testing.T) {
+	m := model{
+		podcasts: []podcast.Feed{{
+			Title: "Feed A",
+			URL:   "http://feed-a",
+			Episodes: []podcast.Episode{
+				{Title: "New One", URL: "http://ep1", IsNew: true, PubDate: time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)},
+				{Title: "Old One", URL: "http://ep2", IsNew: false, PubDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)},
+			},
+		}},
+	}
+	items := m.buildNewEpisodeItems()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 new item, got %d", len(items))
+	}
+	if items[0].Name != "Feed A — New One" {
+		t.Fatalf("unexpected name: %q", items[0].Name)
+	}
+	if items[0].FeedURL != "http://feed-a" || items[0].URL != "http://ep1" {
+		t.Fatalf("unexpected URLs: %+v", items[0])
+	}
+}
+
+func TestBuildContinueListeningItems(t *testing.T) {
+	m := model{
+		podcasts: []podcast.Feed{{
+			Title: "Feed A",
+			URL:   "http://feed-a",
+			Episodes: []podcast.Episode{
+				{Title: "In Progress", URL: "http://ep1", Position: 120, Duration: 300},
+				{Title: "Completed", URL: "http://ep2", Position: 300, Duration: 300, Completed: true},
+				{Title: "Unplayed", URL: "http://ep3", Position: 0, Duration: 300},
+			},
+		}},
+	}
+	items := m.buildContinueListeningItems()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 continue item, got %d", len(items))
+	}
+	if items[0].Name != "Feed A — In Progress" {
+		t.Fatalf("unexpected name: %q", items[0].Name)
+	}
+}
+
+func TestSettingsCount(t *testing.T) {
+	m := model{}
+	if m.settingsCount() != 5 {
+		t.Fatalf("expected 5 settings, got %d", m.settingsCount())
+	}
+}
+
+func TestCurrentListCoversPodcastViews(t *testing.T) {
+	m := model{}
+	views := []view{viewRadioBrowse, viewRadioFavourites, viewPodcastSearch, viewPodcastSubscriptions, viewPodcastEpisodes, viewPodcastNewEpisodes, viewPodcastContinueListening}
+	for _, v := range views {
+		m.view = v
+		l := m.currentList()
+		if l == nil {
+			t.Fatalf("currentList nil for view %s", v)
+		}
+	}
+}
+
+func TestStationPlayURL(t *testing.T) {
+	st := store.Station{URL: "http://fallback", URLResolved: "http://resolved"}
+	if got := st.PlayURL(); got != "http://resolved" {
+		t.Fatalf("expected resolved URL, got %q", got)
+	}
+	st.URLResolved = ""
+	if got := st.PlayURL(); got != "http://fallback" {
+		t.Fatalf("expected fallback URL, got %q", got)
+	}
+}
+
+func TestListItemKind(t *testing.T) {
+	if ui.KindStation != 0 {
+		t.Fatalf("unexpected KindStation value: %d", ui.KindStation)
+	}
+}
+
+func TestRadioEnterPlaysStation(t *testing.T) {
+	m, fp, fr := newTestModel()
+	fr.results = []store.Station{{Name: "Radio One", URL: "http://one", Codec: "MP3", Bitrate: 128}}
+	m = updateModel(m, searchMsg{stations: fr.results})
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(fp.played) != 1 {
+		t.Fatalf("expected 1 played media, got %d", len(fp.played))
+	}
+	if fp.played[0].Name != "Radio One" {
+		t.Fatalf("expected Radio One, got %q", fp.played[0].Name)
+	}
+}
+
+func TestSlashFocusesSearchInRadioBrowse(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if m.focus != focusSearch {
+		t.Fatalf("expected focusSearch, got %d", m.focus)
+	}
+}
+
+func TestGlobalVolumeKeys(t *testing.T) {
+	m, fp, _ := newTestModel()
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
+	if fp.volume <= 0 {
+		t.Fatalf("expected volume increased, got %d", fp.volume)
+	}
+}
+
+func TestSettingsNavigation(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewSettings)
+	if m.view != viewSettings {
+		t.Fatalf("expected settings view, got %s", m.view)
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.settingsCursor != 1 {
+		t.Fatalf("expected cursor 1, got %d", m.settingsCursor)
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyUp})
+	if m.settingsCursor != 0 {
+		t.Fatalf("expected cursor 0, got %d", m.settingsCursor)
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus, got %d", m.focus)
+	}
+}
+
+func TestPodcastSearchEnterPreviews(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewPodcastSearch)
+	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
+
+	// Enter triggers an async feed fetch; simulate the fetch completing.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = updateModel(m, podcastFeedMsg{feed: &podcast.Feed{Title: "Show", URL: "http://feed"}, subscribe: false})
+
+	if m.podcastPreviewFeed == nil {
+		t.Fatal("expected feed preview to start")
+	}
+}
+
+func TestActivateViewSetsFocus(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewRadioFavourites)
+	if m.view != viewRadioFavourites {
+		t.Fatalf("expected favourites view, got %s", m.view)
+	}
+	if m.focus != focusList {
+		t.Fatalf("expected list focus, got %d", m.focus)
+	}
+}
