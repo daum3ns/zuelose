@@ -113,7 +113,8 @@ func (f *Favourites) Add(st Station, category string) error {
 	return nil
 }
 
-// Remove deletes a favourite by category and station name.
+// Remove deletes a favourite by category and station name. Empty categories are
+// removed so that the favourites list does not accumulate dead groups.
 func (f *Favourites) Remove(category, name string) {
 	for i := range f.Categories {
 		if f.Categories[i].Name != category {
@@ -126,6 +127,9 @@ func (f *Favourites) Remove(category, name string) {
 			}
 		}
 		f.Categories[i].Stations = filtered
+		if len(f.Categories[i].Stations) == 0 {
+			f.Categories = append(f.Categories[:i], f.Categories[i+1:]...)
+		}
 		return
 	}
 }

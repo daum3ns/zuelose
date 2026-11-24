@@ -81,8 +81,29 @@ func TestFavouritesAddAndRemove(t *testing.T) {
 		t.Fatal("expected duplicate error")
 	}
 	favs.Remove("Cat", "S1")
-	if len(favs.Categories[0].Stations) != 0 {
-		t.Fatal("expected station removed")
+	if len(favs.Categories) != 0 {
+		t.Fatalf("expected empty category to be removed, got %+v", favs.Categories)
+	}
+}
+
+func TestFavouritesRemoveOnlyEmptyCategory(t *testing.T) {
+	favs := Favourites{}
+	if err := favs.Add(Station{Name: "S1", URL: "http://s1"}, "Cat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := favs.Add(Station{Name: "S2", URL: "http://s2"}, "Cat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := favs.Add(Station{Name: "S3", URL: "http://s3"}, "Other"); err != nil {
+		t.Fatal(err)
+	}
+	favs.Remove("Cat", "S1")
+	if len(favs.Categories) != 2 {
+		t.Fatalf("expected 2 categories, got %d", len(favs.Categories))
+	}
+	favs.Remove("Cat", "S2")
+	if len(favs.Categories) != 1 || favs.Categories[0].Name != "Other" {
+		t.Fatalf("expected only 'Other', got %+v", favs.Categories)
 	}
 }
 
