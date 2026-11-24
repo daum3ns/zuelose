@@ -14,6 +14,8 @@ type Config struct {
 	APIHost                string `yaml:"api_host"`
 	PodcastRefreshInterval int    `yaml:"podcast_refresh_interval"` // minutes
 	PodcastBrowser         string `yaml:"podcast_browser"`
+	Theme                  string `yaml:"theme"`
+	ThemeMode              string `yaml:"theme_mode"`
 }
 
 // DefaultConfig returns sensible defaults.
@@ -24,6 +26,8 @@ func DefaultConfig() Config {
 		APIHost:                "all.api.radio-browser.info",
 		PodcastRefreshInterval: 60,
 		PodcastBrowser:         "itunes",
+		Theme:                  "tokyo-night",
+		ThemeMode:              "dark",
 	}
 }
 

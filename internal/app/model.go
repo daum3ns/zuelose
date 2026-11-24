@@ -21,6 +21,19 @@ import (
 	"github.com/daum3ns/zuelose/internal/ui"
 )
 
+func init() {
+	cfg := store.DefaultConfig()
+	ui.SetTheme(ui.ThemeByName(cfg.Theme))
+}
+
+func themeForConfig(cfg store.Config) ui.Theme {
+	t := ui.ThemeByName(cfg.Theme)
+	if t.Mode != cfg.ThemeMode {
+		return ui.DefaultThemeForMode(cfg.ThemeMode)
+	}
+	return t
+}
+
 type focusArea int
 
 const (
@@ -177,6 +190,7 @@ func NewModel(cfg store.Config, favs store.Favourites, mpv Player, client RadioC
 	m.podcasts, _ = store.LoadPodcasts()
 	m.list.Items = m.buildStationItems()
 	m.blurAllInputs()
+	ui.SetTheme(themeForConfig(cfg))
 	return m
 }
 
@@ -671,7 +685,17 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter", "e":
-			return m.openSettingsEditor()
+			switch m.settingsCursor {
+			case 0, 1, 2, 3:
+				return m.openSettingsEditor()
+			case 4:
+				return m.cyclePodcastBrowser()
+			case 5:
+				return m.cycleThemeMode()
+			case 6:
+				return m.cycleTheme()
+			}
+			return m, nil
 		case "tab", "left", "esc":
 			m.focus = focusSidebar
 			m.blurAllInputs()
@@ -1294,8 +1318,9 @@ func (m model) renderFooter(height int) string {
 	if m.status.Media.Name != "" {
 		name = m.status.Media.Name
 	}
+	pausedStyle := lipgloss.NewStyle().Foreground(ui.ColorWarn())
 	if m.status.Paused {
-		name = lipgloss.NewStyle().Foreground(ui.ColorWarn).Blink(true).Render(name + " (paused)")
+		name = pausedStyle.Blink(true).Render(name + " (paused)")
 	}
 
 	codec := m.status.Codec
@@ -1341,6 +1366,12 @@ func (m model) renderFooter(height int) string {
 		}
 	}
 
+	if m.status.Paused {
+		for i := 1; i < len(textLines); i++ {
+			textLines[i] = pausedStyle.Render(textLines[i])
+		}
+	}
+
 	if m.errMsg != "" {
 		lastIdx := len(textLines) - 1
 		textLines[lastIdx] = ui.ErrorStyle.Render(m.errMsg)
@@ -1375,13 +1406,13 @@ func (m model) renderFooter(height int) string {
 		Width(logoW).
 		Height(innerH).
 		MaxHeight(innerH).
-		Background(ui.ColorBg).
+		Background(ui.ColorBg()).
 		Render(initials)
-	spacer := lipgloss.NewStyle().Width(spacerW).Height(innerH).Background(ui.ColorBg).Render("")
+	spacer := lipgloss.NewStyle().Width(spacerW).Height(innerH).Background(ui.ColorBg()).Render("")
 
 	textContent := strings.Join(textLines, "\n")
 	textBlock := lipgloss.PlaceVertical(innerH, lipgloss.Center, textContent)
-	textBox := lipgloss.NewStyle().Width(textW).Height(innerH).MaxHeight(innerH).Background(ui.ColorBg).Render(textBlock)
+	textBox := lipgloss.NewStyle().Width(textW).Height(innerH).MaxHeight(innerH).Background(ui.ColorBg()).Render(textBlock)
 
 	contentBlock := lipgloss.JoinHorizontal(lipgloss.Top, initialsBox, spacer, textBox)
 	return m.renderFooterWithLabel(height, innerW, contentBlock)
@@ -1395,8 +1426,8 @@ func (m model) renderFooterWithLabel(height, innerW int, content string) string 
 		fill = 0
 	}
 
-	borderStyle := lipgloss.NewStyle().Background(ui.ColorBg).Foreground(ui.ColorPrimary)
-	contentBg := lipgloss.NewStyle().Background(ui.ColorBg)
+	borderStyle := lipgloss.NewStyle().Background(ui.ColorBg()).Foreground(ui.ColorPrimary())
+	contentBg := lipgloss.NewStyle().Background(ui.ColorBg())
 
 	top := borderStyle.Render("╭" + label + strings.Repeat("─", fill) + "╮")
 	bottom := borderStyle.Render("╰" + strings.Repeat("─", innerW) + "╯")
@@ -1415,7 +1446,7 @@ func (m model) renderFooterWithLabel(height, innerW int, content string) string 
 		Height(height).
 		MaxHeight(height).
 		Width(m.width).
-		Background(ui.ColorBg).
+		Background(ui.ColorBg()).
 		Render(strings.Join(lines, "\n"))
 }
 
@@ -1438,24 +1469,24 @@ func (m model) renderSidebar(height, width int) string {
 
 		if it.isHeader {
 			style = style.
-				Background(ui.ColorSurface).
-				Foreground(ui.ColorSuccess).
+				Background(ui.ColorSurface()).
+				Foreground(ui.ColorSuccess()).
 				Bold(true)
 		}
 
 		selected := i == m.sidebarCursor
 		if !it.isHeader && selected && m.focus == focusSidebar {
-			style = style.Background(ui.ColorPrimary).Foreground(ui.ColorBg).Bold(true)
+			style = style.Background(ui.ColorPrimary()).Foreground(ui.ColorBg()).Bold(true)
 		} else if !it.isHeader && selected {
-			style = style.Background(ui.ColorSecondary).Foreground(ui.ColorBg).Bold(true)
+			style = style.Background(ui.ColorSecondary()).Foreground(ui.ColorBg()).Bold(true)
 		}
 
 		lines = append(lines, style.Render(it.label))
 	}
 	content := strings.Join(lines, "\n")
-	borderColor := ui.ColorMuted
+	borderColor := ui.ColorMuted()
 	if m.focus == focusSidebar {
-		borderColor = ui.ColorPrimary
+		borderColor = ui.ColorPrimary()
 	}
 	return ui.SidebarStyle.
 		BorderForeground(borderColor).
@@ -1488,9 +1519,9 @@ func (m model) renderMain(height, width int) string {
 }
 
 func (m model) mainPanelStyle() lipgloss.Style {
-	borderColor := ui.ColorMuted
+	borderColor := ui.ColorMuted()
 	if m.focus == focusSearch || m.focus == focusList {
-		borderColor = ui.ColorPrimary
+		borderColor = ui.ColorPrimary()
 	}
 	return ui.MainStyle.BorderForeground(borderColor)
 }
@@ -1597,7 +1628,7 @@ func (m model) renderPodcastContinueListening(height, width int) string {
 }
 
 func (m model) settingsCount() int {
-	return 5
+	return 7
 }
 
 func (m model) renderSettings(height, width int) string {
@@ -1607,6 +1638,8 @@ func (m model) renderSettings(height, width int) string {
 		fmt.Sprintf("Default volume:    %d%%", m.config.Volume),
 		fmt.Sprintf("Refresh interval:  %d min", m.config.PodcastRefreshInterval),
 		fmt.Sprintf("Podcast browser:   %s", m.config.PodcastBrowser),
+		fmt.Sprintf("Theme mode:        %s", m.config.ThemeMode),
+		fmt.Sprintf("Theme:             %s", m.config.Theme),
 	}
 	lines := []string{ui.CategoryStyle.Render("Settings"), ""}
 	for i, l := range labels {
@@ -1624,37 +1657,25 @@ func (m model) podcastBrowserOptions() []string {
 }
 
 func (m model) openSettingsEditor() (tea.Model, tea.Cmd) {
-	m.editingSetting = true
 	m.settingInput.SetValue("")
 	switch m.settingsCursor {
 	case 0:
 		m.settingInput.SetValue(m.config.MpvPath)
-		m.settingInput.Focus()
-		return m, textinput.Blink
 	case 1:
 		m.settingInput.SetValue(m.config.APIHost)
-		m.settingInput.Focus()
-		return m, textinput.Blink
 	case 2:
 		m.settingInput.SetValue(fmt.Sprintf("%d", m.config.Volume))
-		m.settingInput.Focus()
-		return m, textinput.Blink
 	case 3:
 		m.settingInput.SetValue(fmt.Sprintf("%d", m.config.PodcastRefreshInterval))
-		m.settingInput.Focus()
-		return m, textinput.Blink
-	case 4:
-		// Podcast browser is a cycle control, not a text input.
-		m.settingInput.Blur()
+	default:
 		return m, nil
 	}
-	return m, nil
+	m.editingSetting = true
+	m.settingInput.Focus()
+	return m, textinput.Blink
 }
 
 func (m model) updateSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.settingsCursor == 4 {
-		return m.updatePodcastBrowserDialog(msg)
-	}
 	switch msg.Type {
 	case tea.KeyEnter:
 		return m.saveSettingValue()
@@ -1666,18 +1687,6 @@ func (m model) updateSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.settingInput, cmd = m.settingInput.Update(msg)
 	return m, cmd
-}
-
-func (m model) updatePodcastBrowserDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := msg.String()
-	switch k {
-	case "left", "right", "enter":
-		return m.cyclePodcastBrowser()
-	case "esc":
-		m.editingSetting = false
-		return m, nil
-	}
-	return m, nil
 }
 
 func (m model) cyclePodcastBrowser() (tea.Model, tea.Cmd) {
@@ -1695,6 +1704,46 @@ func (m model) cyclePodcastBrowser() (tea.Model, tea.Cmd) {
 	}
 	idx = (idx + 1) % len(opts)
 	m.config.PodcastBrowser = opts[idx]
+	m.editingSetting = false
+	if err := store.SaveConfig(m.config); err != nil {
+		m.errMsg = err.Error()
+	}
+	return m, nil
+}
+
+func (m model) cycleThemeMode() (tea.Model, tea.Cmd) {
+	if m.config.ThemeMode == ui.ThemeModeDark {
+		m.config.ThemeMode = ui.ThemeModeLight
+	} else {
+		m.config.ThemeMode = ui.ThemeModeDark
+	}
+	// Pick the first theme of the new mode so the UI updates immediately.
+	t := ui.DefaultThemeForMode(m.config.ThemeMode)
+	m.config.Theme = t.Name
+	ui.SetTheme(t)
+	m.editingSetting = false
+	if err := store.SaveConfig(m.config); err != nil {
+		m.errMsg = err.Error()
+	}
+	return m, nil
+}
+
+func (m model) cycleTheme() (tea.Model, tea.Cmd) {
+	opts := ui.ThemeNamesByMode(m.config.ThemeMode)
+	if len(opts) == 0 {
+		m.editingSetting = false
+		return m, nil
+	}
+	idx := 0
+	for i, o := range opts {
+		if o == m.config.Theme {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + 1) % len(opts)
+	m.config.Theme = opts[idx]
+	ui.SetTheme(ui.ThemeByName(m.config.Theme))
 	m.editingSetting = false
 	if err := store.SaveConfig(m.config); err != nil {
 		m.errMsg = err.Error()
@@ -1740,36 +1789,23 @@ func (m model) renderSettingsDialog() string {
 		"API host",
 		"Default volume (0-100)",
 		"Refresh interval (minutes, min 5)",
-		"Podcast browser",
-	}
-	var value string
-	if m.settingsCursor == 4 {
-		value = ui.MutedStyle.Render("< ") + m.config.PodcastBrowser + ui.MutedStyle.Render(" >")
-	} else {
-		value = m.settingInput.View()
 	}
 	content := ui.CategoryStyle.Render(titles[m.settingsCursor]) + "\n\n" +
-		value + "\n" +
+		m.settingInput.View() + "\n" +
 		ui.MutedStyle.Render("Enter: save  •  Esc: cancel")
 
-	if m.settingsCursor == 4 {
-		content = ui.CategoryStyle.Render(titles[m.settingsCursor]) + "\n\n" +
-			value + "\n" +
-			ui.MutedStyle.Render("←/→/Enter: cycle  •  Esc: cancel")
-	}
-
 	box := lipgloss.NewStyle().
-		Background(ui.ColorSurface).
-		Foreground(ui.ColorText).
+		Background(ui.ColorSurface()).
+		Foreground(ui.ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorPrimary).
+		BorderForeground(ui.ColorPrimary()).
 		Width(m.width - 20)
 	return box.Render(content)
 }
 
 func (m model) hintText() string {
-	keyStyle := lipgloss.NewStyle().Foreground(ui.ColorPrimary).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(ui.ColorPrimary()).Bold(true)
 	descStyle := ui.MutedStyle
 
 	kv := func(key, desc string) string {
@@ -1807,7 +1843,7 @@ func (m model) hintText() string {
 	case viewPodcastContinueListening:
 		parts = []string{kv("↑↓", "navigate"), kv("Enter", "resume"), kv("R", "refresh"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
 	case viewSettings:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "edit"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "navigate"), kv("Enter", "edit/cycle"), kv("?", "help"), kv("Q", "quit")}
 	default:
 		return kv("?", "help") + "  " + kv("Q", "quit")
 	}
@@ -1837,11 +1873,11 @@ func (m model) renderSaveDialog() string {
 		ui.MutedStyle.Render("Tab: autocomplete  •  Enter: save  •  Esc: cancel")
 
 	box := lipgloss.NewStyle().
-		Background(ui.ColorSurface).
-		Foreground(ui.ColorText).
+		Background(ui.ColorSurface()).
+		Foreground(ui.ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorPrimary).
+		BorderForeground(ui.ColorPrimary()).
 		Width(m.width - 10)
 	return box.Render(content)
 }
@@ -1852,11 +1888,11 @@ func (m model) renderCreateCategoryDialog() string {
 		ui.MutedStyle.Render("Enter: create  •  Esc: cancel")
 
 	box := lipgloss.NewStyle().
-		Background(ui.ColorSurface).
-		Foreground(ui.ColorText).
+		Background(ui.ColorSurface()).
+		Foreground(ui.ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorPrimary).
+		BorderForeground(ui.ColorPrimary()).
 		Width(m.width - 20)
 	return box.Render(content)
 }
@@ -1867,11 +1903,11 @@ func (m model) renderAddPodcastDialog() string {
 		ui.MutedStyle.Render("Enter: fetch  •  Esc: cancel")
 
 	box := lipgloss.NewStyle().
-		Background(ui.ColorSurface).
-		Foreground(ui.ColorText).
+		Background(ui.ColorSurface()).
+		Foreground(ui.ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorPrimary).
+		BorderForeground(ui.ColorPrimary()).
 		Width(m.width - 20)
 	return box.Render(content)
 }
@@ -1882,11 +1918,11 @@ func (m model) renderResumePrompt() string {
 		ui.MutedStyle.Render("R: resume  •  Enter/S: restart  •  Esc: cancel")
 
 	box := lipgloss.NewStyle().
-		Background(ui.ColorSurface).
-		Foreground(ui.ColorText).
+		Background(ui.ColorSurface()).
+		Foreground(ui.ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorPrimary).
+		BorderForeground(ui.ColorPrimary()).
 		Width(m.width - 20)
 	return box.Render(content)
 }
@@ -2092,8 +2128,8 @@ func renderInitials(width int, name string) string {
 	centerStyle := lipgloss.NewStyle().
 		Width(width).
 		Align(lipgloss.Center).
-		Background(ui.ColorBg).
-		Foreground(ui.ColorPrimary).
+		Background(ui.ColorBg()).
+		Foreground(ui.ColorPrimary()).
 		Bold(true)
 
 	maxW := 0

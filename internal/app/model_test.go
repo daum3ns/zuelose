@@ -156,8 +156,69 @@ func TestBuildContinueListeningItems(t *testing.T) {
 
 func TestSettingsCount(t *testing.T) {
 	m := model{}
-	if m.settingsCount() != 5 {
-		t.Fatalf("expected 5 settings, got %d", m.settingsCount())
+	if m.settingsCount() != 7 {
+		t.Fatalf("expected 7 settings, got %d", m.settingsCount())
+	}
+}
+
+func TestThemeModeCycle(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewSettings)
+	m.focus = focusList
+	m.settingsCursor = 5
+	before := m.config.ThemeMode
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.config.ThemeMode == before {
+		t.Fatal("expected theme mode to change")
+	}
+	if ui.CurrentTheme.Mode != m.config.ThemeMode {
+		t.Fatalf("theme mode not applied: %s vs %s", ui.CurrentTheme.Mode, m.config.ThemeMode)
+	}
+	if m.editingSetting {
+		t.Fatal("expected no editor popup for theme mode")
+	}
+}
+
+func TestThemeCycleRespectsMode(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewSettings)
+	m.focus = focusList
+	m.settingsCursor = 6
+	before := m.config.Theme
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.config.Theme == before {
+		t.Fatal("expected theme to change")
+	}
+	if ui.CurrentTheme.Name != m.config.Theme {
+		t.Fatalf("theme not applied: %s vs %s", ui.CurrentTheme.Name, m.config.Theme)
+	}
+	if ui.CurrentTheme.Mode != m.config.ThemeMode {
+		t.Fatalf("theme mode mismatch: %s vs %s", ui.CurrentTheme.Mode, m.config.ThemeMode)
+	}
+	if m.editingSetting {
+		t.Fatal("expected no editor popup for theme")
+	}
+}
+
+func TestPodcastBrowserCycleDirect(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewSettings)
+	m.focus = focusList
+	m.settingsCursor = 4
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.editingSetting {
+		t.Fatal("expected no editor popup for podcast browser")
+	}
+}
+
+func TestTextSettingOpensEditor(t *testing.T) {
+	m, _, _ := newTestModel()
+	m = activate(m, viewSettings)
+	m.focus = focusList
+	m.settingsCursor = 0
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.editingSetting {
+		t.Fatal("expected editor popup for text setting")
 	}
 }
 

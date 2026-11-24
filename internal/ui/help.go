@@ -44,10 +44,10 @@ Other
   Esc / Q      Back / quit
 `
 	box := lipgloss.NewStyle().
-		Background(ColorSurface).
-		Foreground(ColorText).
+		Background(ColorSurface()).
+		Foreground(ColorText()).
 		Padding(1, 2).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary)
+		BorderForeground(ColorPrimary())
 	return box.Render(text)
 }
