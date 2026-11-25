@@ -53,6 +53,7 @@ type Player interface {
 	Play(media player.Media)
 	Stop()
 	TogglePause()
+	Seek(seconds float64)
 	VolumeUp()
 	VolumeDown()
 	SetVolume(int)
@@ -86,6 +87,8 @@ type playerReadyMsg struct {
 type podcastRefreshTickMsg struct{}
 
 type blinkMsg struct{}
+
+type clearToastMsg struct{}
 
 // model is the root Bubble Tea model for zuelose.
 type model struct {
@@ -141,6 +144,10 @@ type model struct {
 	pausedBlink    bool
 	errMsg         string
 	help           bool
+
+	// Feedback toast.
+	toast   string
+	toastAt time.Time
 }
 
 // NewModel builds the initial application model.
@@ -243,6 +250,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pausedBlink = false
 		return m, nil
 
+	case clearToastMsg:
+		m.toast = ""
+		return m, nil
+
 	case player.FinishedMsg:
 		if _, ep := m.findCurrentEpisode(); ep != nil {
 			ep.Completed = true
@@ -323,6 +334,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.view == viewPodcastContinueListening {
 				m.podcastEpisodeList.Items = m.buildContinueListeningItems()
 			}
+			return m.showToast("Subscribed to " + feed.Title)
 		} else {
 			// Preview from search without subscribing.
 			m.podcastPreviewFeed = feed
@@ -524,8 +536,22 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.player.VolumeDown()
 			return m, nil
 		case " ":
-			m.player.TogglePause()
+			if m.status.Media.URL != "" || m.status.Playing || m.status.Paused {
+				m.player.TogglePause()
+			}
 			return m, nil
+		case "shift+left":
+			m.player.Seek(-10)
+			return m.showToast("Seek -10s")
+		case "shift+right":
+			m.player.Seek(10)
+			return m.showToast("Seek +10s")
+		case "shift+up":
+			m.player.Seek(-60)
+			return m.showToast("Seek -60s")
+		case "shift+down":
+			m.player.Seek(60)
+			return m.showToast("Seek +60s")
 		case "/":
 			if m.view == viewRadioBrowse || m.view == viewPodcastSearch {
 				m.focus = focusSearch
@@ -972,7 +998,7 @@ func (m model) deleteSelectedSubscription() (tea.Model, tea.Cmd) {
 	m.podcasts = append(m.podcasts[:idx], m.podcasts[idx+1:]...)
 	_ = m.savePodcasts()
 	m.podcastEpisodeList.Items = m.buildSubscriptionItems()
-	return m, nil
+	return m.showToast("Unsubscribed")
 }
 
 func (m model) playSelectedEpisode(forceRestart, forceResume bool) (tea.Model, tea.Cmd) {
@@ -1201,7 +1227,7 @@ func (m model) submitSaveDialog() (tea.Model, tea.Cmd) {
 	if m.view == viewRadioFavourites {
 		m.list.Items = m.buildFavItems()
 	}
-	return m, nil
+	return m.showToast("Saved to favourites")
 }
 
 func (m model) deleteSelectedFavourite() (tea.Model, tea.Cmd) {
@@ -1224,7 +1250,7 @@ func (m model) deleteSelectedFavourite() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.list.Items = m.buildFavItems()
-			return m, nil
+			return m.showToast("Category deleted")
 		}
 		return m, nil
 	}
@@ -1244,7 +1270,7 @@ func (m model) deleteSelectedFavourite() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.list.Items = m.buildFavItems()
-	return m, nil
+	return m.showToast("Removed from favourites")
 }
 
 func (m model) updateCreateCategoryDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1270,7 +1296,7 @@ func (m model) updateCreateCategoryDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.creatingCategory = false
 		m.catInput.Blur()
 		m.list.Items = m.buildFavItems()
-		return m, nil
+		return m.showToast("Category created")
 	}
 
 	var cmd tea.Cmd
@@ -1343,6 +1369,12 @@ func (m *model) focusCurrentSearch() {
 	}
 }
 
+func (m model) showToast(msg string) (tea.Model, tea.Cmd) {
+	m.toast = msg
+	m.toastAt = time.Now()
+	return m, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return clearToastMsg{} })
+}
+
 func (m model) renderHeader(height int) string {
 	title := "♪ zuelose"
 	innerW := m.width - 2
@@ -1361,6 +1393,9 @@ func (m model) renderHeader(height int) string {
 }
 
 func (m model) renderFooter(height int) string {
+	disconnected := m.status.Media.URL != "" && !m.status.Media.IsPodcast && !m.status.Playing
+	showAsPaused := m.status.Paused || disconnected
+
 	name := "Stopped"
 	if m.status.Media.Name != "" {
 		name = m.status.Media.Name
@@ -1368,6 +1403,8 @@ func (m model) renderFooter(height int) string {
 	pausedStyle := lipgloss.NewStyle().Foreground(ui.ColorWarn())
 	if m.status.Paused {
 		name = pausedStyle.Blink(true).Render(name + " (paused)")
+	} else if disconnected {
+		name = pausedStyle.Blink(true).Render(name + " (disconnected)")
 	}
 
 	codec := m.status.Codec
@@ -1380,6 +1417,17 @@ func (m model) renderFooter(height int) string {
 	}
 
 	var textLines []string
+	playbackHints := ""
+	if m.status.Media.URL != "" {
+		if m.status.Media.IsPodcast {
+			playbackHints = "Space pause · Shift+←→ seek"
+		} else if m.status.Playing {
+			playbackHints = "Space disconnect"
+		} else {
+			playbackHints = "Space connect"
+		}
+	}
+
 	if m.status.Media.IsPodcast {
 		feedTitle := "Unknown podcast"
 		if m.currentFeed != nil && m.currentFeed.Title != "" {
@@ -1400,6 +1448,9 @@ func (m model) renderFooter(height int) string {
 			progress,
 			info,
 		}
+		if playbackHints != "" {
+			textLines = append(textLines, ui.MutedStyle.Render(playbackHints))
+		}
 	} else {
 		track := m.status.Title
 		if track == "" {
@@ -1411,9 +1462,12 @@ func (m model) renderFooter(height int) string {
 			fmt.Sprintf("Track: %s", track),
 			info,
 		}
+		if playbackHints != "" {
+			textLines = append(textLines, ui.MutedStyle.Render(playbackHints))
+		}
 	}
 
-	if m.status.Paused {
+	if showAsPaused {
 		for i := 1; i < len(textLines); i++ {
 			textLines[i] = pausedStyle.Render(textLines[i])
 		}
@@ -1896,11 +1950,15 @@ func (m model) hintText() string {
 }
 
 func (m model) renderHintBar(height int) string {
+	content := m.hintText()
+	if m.toast != "" {
+		content = ui.CategoryStyle.Render(m.toast)
+	}
 	return lipgloss.NewStyle().
 		Height(height).
 		MaxHeight(height).
 		Width(m.width).
-		Render(m.hintText())
+		Render(content)
 }
 
 func (m model) renderSaveDialog() string {

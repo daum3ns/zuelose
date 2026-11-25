@@ -15,19 +15,39 @@ import (
 )
 
 type fakePlayer struct {
-	played   []player.Media
-	paused   bool
-	volume   int
-	started  bool
+	played      []player.Media
+	paused      bool
+	volume      int
+	started     bool
+	seeked      []float64
+	toggleCnt   int
+	currentMedia player.Media
+	playing     bool
 }
 
-func (f *fakePlayer) Start() error                       { f.started = true; return nil }
-func (f *fakePlayer) Play(m player.Media)                { f.played = append(f.played, m) }
-func (f *fakePlayer) Stop()                              {}
-func (f *fakePlayer) TogglePause()                       { f.paused = !f.paused }
-func (f *fakePlayer) VolumeUp()                          { f.volume += 5 }
-func (f *fakePlayer) VolumeDown()                        { f.volume -= 5 }
-func (f *fakePlayer) SetVolume(v int)                    { f.volume = v }
+func (f *fakePlayer) Start() error        { f.started = true; return nil }
+func (f *fakePlayer) Play(m player.Media) { f.played = append(f.played, m); f.currentMedia = m; f.playing = true }
+func (f *fakePlayer) Stop()               { f.playing = false }
+func (f *fakePlayer) Seek(seconds float64) { f.seeked = append(f.seeked, seconds) }
+func (f *fakePlayer) VolumeUp()           { f.volume += 5 }
+func (f *fakePlayer) VolumeDown()         { f.volume -= 5 }
+func (f *fakePlayer) SetVolume(v int)     { f.volume = v }
+func (f *fakePlayer) TogglePause() {
+	f.toggleCnt++
+	if f.currentMedia.URL == "" {
+		return
+	}
+	if f.currentMedia.IsPodcast {
+		f.paused = !f.paused
+		return
+	}
+	if f.playing {
+		f.playing = false
+		return
+	}
+	f.played = append(f.played, f.currentMedia)
+	f.playing = true
+}
 
 type fakeRadio struct {
 	results []store.Station
@@ -37,7 +57,9 @@ func (f *fakeRadio) Search(ctx context.Context, name string, limit int) ([]store
 	return f.results, nil
 }
 
-func newTestModel() (model, *fakePlayer, *fakeRadio) {
+func newTestModel(t *testing.T) (model, *fakePlayer, *fakeRadio) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	fp := &fakePlayer{}
 	fr := &fakeRadio{}
 	m := NewModel(store.DefaultConfig(), store.Favourites{}, fp, fr)
@@ -163,7 +185,7 @@ func TestSettingsCount(t *testing.T) {
 }
 
 func TestThemeModeCycle(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewSettings)
 	m.focus = focusList
 	m.settingsCursor = 5
@@ -181,7 +203,7 @@ func TestThemeModeCycle(t *testing.T) {
 }
 
 func TestThemeCycleRespectsMode(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewSettings)
 	m.focus = focusList
 	m.settingsCursor = 6
@@ -202,7 +224,7 @@ func TestThemeCycleRespectsMode(t *testing.T) {
 }
 
 func TestPodcastBrowserCycleDirect(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewSettings)
 	m.focus = focusList
 	m.settingsCursor = 4
@@ -213,7 +235,7 @@ func TestPodcastBrowserCycleDirect(t *testing.T) {
 }
 
 func TestTextSettingOpensEditor(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewSettings)
 	m.focus = focusList
 	m.settingsCursor = 0
@@ -253,7 +275,7 @@ func TestListItemKind(t *testing.T) {
 }
 
 func TestRadioEnterPlaysStation(t *testing.T) {
-	m, fp, fr := newTestModel()
+	m, fp, fr := newTestModel(t)
 	fr.results = []store.Station{{Name: "Radio One", URL: "http://one", Codec: "MP3", Bitrate: 128}}
 	m = updateModel(m, searchMsg{stations: fr.results})
 
@@ -268,7 +290,7 @@ func TestRadioEnterPlaysStation(t *testing.T) {
 }
 
 func TestSlashFocusesSearchInRadioBrowse(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	if m.focus != focusSearch {
 		t.Fatalf("expected focusSearch, got %d", m.focus)
@@ -276,7 +298,7 @@ func TestSlashFocusesSearchInRadioBrowse(t *testing.T) {
 }
 
 func TestGlobalVolumeKeys(t *testing.T) {
-	m, fp, _ := newTestModel()
+	m, fp, _ := newTestModel(t)
 	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'+'}})
 	if fp.volume <= 0 {
 		t.Fatalf("expected volume increased, got %d", fp.volume)
@@ -284,7 +306,7 @@ func TestGlobalVolumeKeys(t *testing.T) {
 }
 
 func TestSettingsNavigation(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewSettings)
 	if m.view != viewSettings {
 		t.Fatalf("expected settings view, got %s", m.view)
@@ -307,7 +329,7 @@ func TestSettingsNavigation(t *testing.T) {
 }
 
 func TestPodcastSearchEnterPreviews(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewPodcastSearch)
 	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
 
@@ -324,7 +346,7 @@ func TestPodcastSearchEnterPreviews(t *testing.T) {
 }
 
 func TestPodcastPreviewViewTransitions(t *testing.T) {
-	m, fp, _ := newTestModel()
+	m, fp, _ := newTestModel(t)
 	m = activate(m, viewPodcastSearch)
 	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
 
@@ -359,10 +381,11 @@ func TestPodcastPreviewViewTransitions(t *testing.T) {
 }
 
 func TestPreviewEnterPlaysEvenWithStaleSelectedFeed(t *testing.T) {
-	m, fp, _ := newTestModel()
+	m, fp, _ := newTestModel(t)
 	m = activate(m, viewPodcastSearch)
 
 	// Pretend a subscription was opened earlier.
+	m.podcasts = append(m.podcasts, podcast.Feed{Title: "Stale", URL: "http://stale"})
 	m.podcastSelectedFeed = &m.podcasts[0]
 
 	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
@@ -449,12 +472,85 @@ func TestBuildPreviewItemsCapsAtTen(t *testing.T) {
 }
 
 func TestActivateViewSetsFocus(t *testing.T) {
-	m, _, _ := newTestModel()
+	m, _, _ := newTestModel(t)
 	m = activate(m, viewRadioFavourites)
 	if m.view != viewRadioFavourites {
 		t.Fatalf("expected favourites view, got %s", m.view)
 	}
 	if m.focus != focusList {
 		t.Fatalf("expected list focus, got %d", m.focus)
+	}
+}
+
+func TestSeekKeysSeekPodcast(t *testing.T) {
+	m, fp, _ := newTestModel(t)
+	m.status.Media = player.Media{Name: "Episode", URL: "http://ep", IsPodcast: true}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftLeft})
+	if len(fp.seeked) != 1 || fp.seeked[0] != -10 {
+		t.Fatalf("expected seek -10, got %v", fp.seeked)
+	}
+	if m.toast != "Seek -10s" {
+		t.Fatalf("expected toast, got %q", m.toast)
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftRight})
+	if len(fp.seeked) != 2 || fp.seeked[1] != 10 {
+		t.Fatalf("expected seek +10, got %v", fp.seeked)
+	}
+}
+
+func TestSaveFavouriteShowsToast(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.saving = true
+	m.saveStation = store.Station{Name: "Soma", URL: "http://soma"}
+	m.saveCat.SetValue("chill")
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.toast != "Saved to favourites" {
+		t.Fatalf("expected toast, got %q", m.toast)
+	}
+	if m.saving {
+		t.Fatal("expected dialog closed")
+	}
+}
+
+func TestSpaceTogglesPauseOnlyWhenLoaded(t *testing.T) {
+	m, fp, _ := newTestModel(t)
+
+	// No media loaded: Space does nothing.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeySpace})
+	if fp.toggleCnt != 0 {
+		t.Fatalf("expected no toggle when idle, got %d", fp.toggleCnt)
+	}
+
+	// Podcast media loaded: Space toggles.
+	m.status.Media = player.Media{Name: "Episode", URL: "http://ep", IsPodcast: true}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeySpace})
+	if fp.toggleCnt != 1 {
+		t.Fatalf("expected one toggle, got %d", fp.toggleCnt)
+	}
+}
+
+func TestRadioSpaceConnectsAndDisconnects(t *testing.T) {
+	m, fp, _ := newTestModel(t)
+
+	// Start playing a radio station.
+	m.player.Play(player.Media{Name: "Station", URL: "http://station"})
+	m.status.Media = player.Media{Name: "Station", URL: "http://station"}
+	m.status.Playing = true
+
+	// Space disconnects.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeySpace})
+	if fp.playing {
+		t.Fatal("expected radio to disconnect")
+	}
+
+	// Space reconnects.
+	m.status.Playing = false
+	playedBefore := len(fp.played)
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeySpace})
+	if len(fp.played) != playedBefore+1 {
+		t.Fatalf("expected radio to reconnect, played count %d", len(fp.played))
 	}
 }

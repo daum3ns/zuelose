@@ -71,6 +71,17 @@ Favourites, subscriptions, and episode progress are saved automatically in the s
 | `q` / `Ctrl+c` | Quit |
 | `?` | Help overlay |
 
+### Playback
+
+These are shown in the now-playing pane when media is active:
+
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / resume (podcasts) |
+| `Space` | Connect / disconnect (radio streams) |
+| `Shift+←` / `Shift+→` | Seek ±10 s (podcasts) |
+| `Shift+↑` / `Shift+↓` | Seek ±60 s (podcasts) |
+
 ### Radio
 
 | Key | Action |

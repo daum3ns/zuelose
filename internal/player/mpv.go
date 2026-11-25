@@ -51,6 +51,7 @@ type MPV struct {
 	proc    *os.Process
 	conn    net.Conn
 	mu      sync.Mutex
+	done    chan struct{}
 
 	status        StatusMsg
 	pendingResume float64
@@ -68,6 +69,7 @@ func New(events chan<- interface{}, mpvPath, socket string) *MPV {
 		events:  events,
 		mpvPath: mpvPath,
 		socket:  socket,
+		done:    make(chan struct{}),
 	}
 }
 
@@ -133,6 +135,9 @@ func (m *MPV) Start() error {
 
 // Close shuts down mpv and cleans up the socket.
 func (m *MPV) Close() error {
+	if m.done != nil {
+		close(m.done)
+	}
 	if m.conn != nil {
 		_ = m.conn.Close()
 	}
@@ -168,11 +173,44 @@ func (m *MPV) Stop() {
 }
 
 // TogglePause pauses or resumes playback.
+// For podcasts this toggles mpv's pause state. For live radio streams there is
+// no true pause; Space connects or disconnects from the stream.
 func (m *MPV) TogglePause() {
 	m.mu.Lock()
-	paused := !m.status.Paused
+	playing := m.status.Playing
+	media := m.status.Media
 	m.mu.Unlock()
-	_ = m.writeCommand("set_property", "pause", paused)
+
+	if media.URL == "" {
+		return
+	}
+
+	if !media.IsPodcast {
+		if playing {
+			// Radio: disconnect from the stream.
+			_ = m.writeCommand("stop")
+		} else {
+			// Radio: reconnect so we never resume from stale buffered audio.
+			m.Play(media)
+		}
+		return
+	}
+
+	// Podcasts: use mpv's own toggle so a stale cached pause state cannot
+	// invert the command.
+	_ = m.writeCommand("cycle", "pause")
+}
+
+// Seek jumps by the given number of seconds. Positive values seek forward,
+// negative values seek backward. Has no effect on live streams.
+func (m *MPV) Seek(seconds float64) {
+	m.mu.Lock()
+	media := m.status.Media
+	m.mu.Unlock()
+	if !media.IsPodcast {
+		return
+	}
+	_ = m.writeCommand("seek", seconds, "relative")
 }
 
 // VolumeUp increases volume by 5, clamped at 100.
@@ -323,20 +361,22 @@ func (m *MPV) sendStatus() {
 	m.mu.Lock()
 	msg := m.status
 	m.mu.Unlock()
-	if m.events != nil {
-		select {
-		case m.events <- msg:
-		default:
-		}
+	if m.events == nil {
+		return
+	}
+	select {
+	case m.events <- msg:
+	case <-m.done:
 	}
 }
 
 func (m *MPV) sendFinished() {
-	if m.events != nil {
-		select {
-		case m.events <- FinishedMsg{}:
-		default:
-		}
+	if m.events == nil {
+		return
+	}
+	select {
+	case m.events <- FinishedMsg{}:
+	case <-m.done:
 	}
 }
 
