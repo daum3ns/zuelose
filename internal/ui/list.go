@@ -14,6 +14,8 @@ const (
 	KindCategory
 	KindPodcastFeed
 	KindPodcastEpisode
+	KindPreviewInfo
+	KindPreviewMeta
 )
 
 // ListItem is a single row in a selectable list.
@@ -53,23 +55,43 @@ func (l *List) clampCursor() {
 	}
 }
 
-// Up moves the cursor up, skipping headers.
+// selectable reports whether the item at idx can be the active cursor position.
+func (l *List) selectable(idx int) bool {
+	if idx < 0 || idx >= len(l.Items) {
+		return false
+	}
+	item := l.Items[idx]
+	return !item.IsHeader && item.Kind != KindPreviewInfo && item.Kind != KindPreviewMeta
+}
+
+// SelectFirst moves the cursor to the first selectable item.
+func (l *List) SelectFirst() {
+	for i := range l.Items {
+		if l.selectable(i) {
+			l.Cursor = i
+			return
+		}
+	}
+	l.Cursor = 0
+}
+
+// Up moves the cursor up, skipping non-selectable items.
 func (l *List) Up() {
 	l.clampCursor()
 	for l.Cursor > 0 {
 		l.Cursor--
-		if !l.Items[l.Cursor].IsHeader {
+		if l.selectable(l.Cursor) {
 			return
 		}
 	}
 }
 
-// Down moves the cursor down, skipping headers.
+// Down moves the cursor down, skipping non-selectable items.
 func (l *List) Down() {
 	l.clampCursor()
 	for l.Cursor < len(l.Items)-1 {
 		l.Cursor++
-		if !l.Items[l.Cursor].IsHeader {
+		if l.selectable(l.Cursor) {
 			return
 		}
 	}
@@ -130,6 +152,10 @@ func (l *List) renderItem(item ListItem, width int, selected bool) string {
 	name := item.Name
 
 	switch item.Kind {
+	case KindPreviewInfo:
+		return truncate(name, width)
+	case KindPreviewMeta:
+		return MutedStyle.Render(truncate(name, width))
 	case KindPodcastEpisode:
 		return l.renderPodcastEpisode(item, name, width, selected)
 	case KindPodcastFeed:

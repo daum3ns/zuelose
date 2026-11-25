@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -314,8 +315,136 @@ func TestPodcastSearchEnterPreviews(t *testing.T) {
 	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = updateModel(m, podcastFeedMsg{feed: &podcast.Feed{Title: "Show", URL: "http://feed"}, subscribe: false})
 
+	if m.view != viewPodcastPreview {
+		t.Fatalf("expected viewPodcastPreview, got %s", m.view)
+	}
 	if m.podcastPreviewFeed == nil {
 		t.Fatal("expected feed preview to start")
+	}
+}
+
+func TestPodcastPreviewViewTransitions(t *testing.T) {
+	m, fp, _ := newTestModel()
+	m = activate(m, viewPodcastSearch)
+	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
+
+	// Enter on a search result opens the preview view.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = updateModel(m, podcastFeedMsg{feed: &podcast.Feed{
+		Title: "Show",
+		URL:   "http://feed",
+		Episodes: []podcast.Episode{
+			{Title: "Episode 1", URL: "http://ep1"},
+		},
+	}, subscribe: false})
+
+	if m.view != viewPodcastPreview {
+		t.Fatalf("expected viewPodcastPreview, got %s", m.view)
+	}
+
+	// Enter in the preview plays the episode.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(fp.played) != 1 || fp.played[0].Name != "Episode 1" {
+		t.Fatalf("expected episode to play, got %+v", fp.played)
+	}
+
+	// Esc returns to search view.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.view != viewPodcastSearch {
+		t.Fatalf("expected viewPodcastSearch after Esc, got %s", m.view)
+	}
+	if m.podcastPreviewFeed != nil {
+		t.Fatal("expected preview feed cleared")
+	}
+}
+
+func TestPreviewEnterPlaysEvenWithStaleSelectedFeed(t *testing.T) {
+	m, fp, _ := newTestModel()
+	m = activate(m, viewPodcastSearch)
+
+	// Pretend a subscription was opened earlier.
+	m.podcastSelectedFeed = &m.podcasts[0]
+
+	m = updateModel(m, podcastSearchMsg{results: []podcast.SearchResult{{Title: "Show", URL: "http://feed"}}})
+
+	// Open the preview.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = updateModel(m, podcastFeedMsg{feed: &podcast.Feed{
+		Title: "Show",
+		URL:   "http://feed",
+		Episodes: []podcast.Episode{
+			{Title: "Episode 1", URL: "http://ep1"},
+		},
+	}, subscribe: false})
+
+	// Enter in the preview must play from the preview, not the stale selected feed.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(fp.played) != 1 || fp.played[0].Name != "Episode 1" {
+		t.Fatalf("expected episode to play from preview, got %+v", fp.played)
+	}
+}
+
+func TestBuildPreviewItems(t *testing.T) {
+	feed := &podcast.Feed{
+		Title:       "My Show",
+		URL:         "http://feed",
+		Description: "A short description.",
+		LastFetched: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+		Episodes: []podcast.Episode{
+			{Title: "Old", URL: "http://old", PubDate: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), Duration: 100},
+			{Title: "New", URL: "http://new", PubDate: time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC), Duration: 200},
+		},
+	}
+
+	m := model{}
+	items := m.buildPreviewItems(feed, 80)
+
+	if len(items) != 7 { // title header + blank + desc line + meta + separator + 2 episodes
+		t.Fatalf("expected 7 preview items, got %d", len(items))
+	}
+	if items[0].Name != "Preview: My Show" || !items[0].IsHeader {
+		t.Fatalf("unexpected title item: %+v", items[0])
+	}
+	if items[1].Name != "" || items[1].Kind != ui.KindPreviewInfo {
+		t.Fatalf("expected blank line after title, got %+v", items[1])
+	}
+	if items[2].Name != "A short description." || items[2].Kind != ui.KindPreviewInfo {
+		t.Fatalf("unexpected description item: %+v", items[2])
+	}
+	if items[3].Kind != ui.KindPreviewMeta {
+		t.Fatalf("expected metadata item, got %+v", items[3])
+	}
+	if items[4].Kind != ui.KindPreviewMeta {
+		t.Fatalf("expected separator item, got %+v", items[4])
+	}
+	if items[5].Name != "New" || items[5].URL != "http://new" {
+		t.Fatalf("expected newest episode first, got %+v", items[5])
+	}
+	if items[6].Name != "Old" || items[6].URL != "http://old" {
+		t.Fatalf("expected older episode second, got %+v", items[6])
+	}
+}
+
+func TestBuildPreviewItemsCapsAtTen(t *testing.T) {
+	feed := &podcast.Feed{Title: "Many", URL: "http://feed"}
+	for i := 0; i < 25; i++ {
+		feed.Episodes = append(feed.Episodes, podcast.Episode{
+			Title:   fmt.Sprintf("Ep %d", i),
+			URL:     fmt.Sprintf("http://ep%d", i),
+			PubDate: time.Date(2024, 1, i+1, 0, 0, 0, 0, time.UTC),
+		})
+	}
+	m := model{}
+	items := m.buildPreviewItems(feed, 80)
+
+	epCount := 0
+	for _, it := range items {
+		if it.Kind == ui.KindPodcastEpisode {
+			epCount++
+		}
+	}
+	if epCount != 10 {
+		t.Fatalf("expected 10 episodes, got %d", epCount)
 	}
 }
 

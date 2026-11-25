@@ -313,6 +313,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = focusList
 				m.podcastEpisodeList.Items = m.buildNewEpisodeItems()
 			}
+			if m.view == viewPodcastPreview {
+				m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.width-24-2)
+				m.podcastEpisodeList.SelectFirst()
+			}
 			if m.view == viewPodcastNewEpisodes {
 				m.podcastEpisodeList.Items = m.buildNewEpisodeItems()
 			}
@@ -322,7 +326,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			// Preview from search without subscribing.
 			m.podcastPreviewFeed = feed
-			m.podcastEpisodeList.Items = m.buildPodcastEpisodeItems(feed)
+			m.view = viewPodcastPreview
+			m.focus = focusList
+			// The list is rendered inside the main pane; use its inner width.
+			listWidth := m.width - 24 - 2
+			if listWidth < 10 {
+				listWidth = 10
+			}
+			m.podcastEpisodeList.Items = m.buildPreviewItems(feed, listWidth)
+			m.podcastEpisodeList.SelectFirst()
 		}
 		return m, nil
 
@@ -520,6 +532,14 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.focusCurrentSearch()
 				return m, nil
 			}
+			if m.view == viewPodcastPreview {
+				m.view = viewPodcastSearch
+				m.podcastPreviewFeed = nil
+				m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
+				m.focus = focusSearch
+				m.focusCurrentSearch()
+				return m, nil
+			}
 		case "r":
 			if m.view == viewRadioBrowse {
 				m.searching = true
@@ -583,11 +603,22 @@ func (m model) updateSidebar(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.activateView(item.v)
 		}
 	case tea.KeyTab:
-		m.focus = focusSearch
-		m.focusCurrentSearch()
+		if m.view == viewRadioBrowse || m.view == viewPodcastSearch {
+			m.focus = focusSearch
+			m.focusCurrentSearch()
+		} else {
+			m.focus = focusList
+			m.blurAllInputs()
+		}
+		return m, nil
 	case tea.KeyRight:
 		m.focus = focusList
 		m.blurAllInputs()
+		return m, nil
+	case tea.KeyEsc:
+		m.focus = focusList
+		m.blurAllInputs()
+		return m, nil
 	}
 	return m, nil
 }
@@ -607,7 +638,15 @@ func (m model) activateView(v view) (tea.Model, tea.Cmd) {
 	case viewPodcastSearch:
 		m.focus = focusSearch
 		m.focusCurrentSearch()
+		m.podcastPreviewFeed = nil
 		m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
+	case viewPodcastPreview:
+		m.focus = focusList
+		m.blurAllInputs()
+		if m.podcastPreviewFeed != nil {
+			m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.width-24-2)
+			m.podcastEpisodeList.SelectFirst()
+		}
 	case viewRadioFavourites:
 		m.focus = focusList
 		m.blurAllInputs()
@@ -634,6 +673,11 @@ func (m model) activateView(v view) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The search input is only used in the actual search views.
+	if m.view != viewRadioBrowse && m.view != viewPodcastSearch {
+		return m, nil
+	}
+
 	switch msg.Type {
 	case tea.KeyEnter:
 		m.focus = focusList
@@ -743,19 +787,18 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case viewPodcastSearch:
 		switch k {
 		case "a":
-			if m.podcastPreviewFeed != nil {
-				return m.subscribePreviewedFeed()
-			}
 			return m.subscribeToSelectedSearchResult()
-		case "esc":
-			if m.podcastPreviewFeed != nil {
-				m.podcastPreviewFeed = nil
-				m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
-				return m, nil
-			}
 		}
-		if m.podcastPreviewFeed != nil && (k == "enter" || k == "r") {
-			return m.playSelectedEpisode(false, false)
+	case viewPodcastPreview:
+		switch k {
+		case "a":
+			return m.subscribePreviewedFeed()
+		case "esc":
+			m.podcastPreviewFeed = nil
+			m.view = viewPodcastSearch
+			m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
+			m.podcastEpisodeList.Cursor = 0
+			return m, nil
 		}
 	case viewPodcastSubscriptions:
 		switch k {
@@ -786,7 +829,7 @@ func (m *model) currentList() *ui.List {
 	switch m.view {
 	case viewRadioBrowse, viewRadioFavourites:
 		return &m.list
-	case viewPodcastSearch, viewPodcastSubscriptions, viewPodcastEpisodes, viewPodcastNewEpisodes, viewPodcastContinueListening:
+	case viewPodcastSearch, viewPodcastPreview, viewPodcastSubscriptions, viewPodcastEpisodes, viewPodcastNewEpisodes, viewPodcastContinueListening:
 		return &m.podcastEpisodeList
 	}
 	return &m.list
@@ -800,6 +843,8 @@ func (m model) activateSelected() (tea.Model, tea.Cmd) {
 		return m.playSelectedFavourite()
 	case viewPodcastSearch:
 		return m.openSelectedSearchResult()
+	case viewPodcastPreview:
+		return m.playSelectedEpisode(false, false)
 	case viewPodcastSubscriptions:
 		return m.openSelectedSubscription()
 	case viewPodcastEpisodes:
@@ -896,9 +941,7 @@ func (m model) subscribePreviewedFeed() (tea.Model, tea.Cmd) {
 	if m.podcastPreviewFeed == nil {
 		return m, nil
 	}
-	url := m.podcastPreviewFeed.URL
-	m.podcastPreviewFeed = nil
-	return m, podcastFetchCmd(url, true)
+	return m, podcastFetchCmd(m.podcastPreviewFeed.URL, true)
 }
 
 func (m model) openSelectedSubscription() (tea.Model, tea.Cmd) {
@@ -946,9 +989,13 @@ func (m model) playSelectedEpisode(forceRestart, forceResume bool) (tea.Model, t
 		feed, ep = store.FindEpisode(m.podcasts, sel.FeedURL, sel.URL)
 	}
 
-	// Fallback to preview/selected feed for episodes not yet subscribed.
+	// Fallback to the appropriate feed for episodes not found in subscriptions.
+	// In the preview view, the active preview feed must win over any stale
+	// selected subscription feed, otherwise Enter in a preview can silently fail.
 	if ep == nil {
-		if m.podcastSelectedFeed != nil {
+		if m.view == viewPodcastPreview && m.podcastPreviewFeed != nil {
+			feed = m.podcastPreviewFeed
+		} else if m.podcastSelectedFeed != nil {
 			feed = m.podcastSelectedFeed
 		} else if m.podcastPreviewFeed != nil {
 			feed = m.podcastPreviewFeed
@@ -1291,7 +1338,7 @@ func (m *model) focusCurrentSearch() {
 	m.blurAllInputs()
 	if m.view == viewRadioBrowse {
 		m.query.Focus()
-	} else if m.view == viewPodcastSearch {
+	} else if m.view == viewPodcastSearch || m.view == viewPodcastPreview {
 		m.podcastQuery.Focus()
 	}
 }
@@ -1504,6 +1551,8 @@ func (m model) renderMain(height, width int) string {
 		return m.renderFavourites(height, width)
 	case viewPodcastSearch:
 		return m.renderPodcastSearch(height, width)
+	case viewPodcastPreview:
+		return m.renderPodcastPreview(height, width)
 	case viewPodcastSubscriptions:
 		return m.renderPodcastSubscriptions(height, width)
 	case viewPodcastEpisodes:
@@ -1566,23 +1615,21 @@ func (m model) renderPodcastSearch(height, width int) string {
 		listHeight = 1
 	}
 
-	var listView string
-	if m.podcastPreviewFeed != nil {
-		previewHeader := ui.CategoryStyle.Render("Preview: "+m.podcastPreviewFeed.Title) + "\n" +
-			ui.MutedStyle.Render("A: subscribe  •  Esc: back to results")
-		previewListHeight := listHeight - 2
-		if previewListHeight < 1 {
-			previewListHeight = 1
-		}
-		listView = previewHeader + "\n" + m.podcastEpisodeList.View(width-2, previewListHeight, m.focus == focusList)
-	} else {
-		listView = m.podcastEpisodeList.View(width-2, listHeight, m.focus == focusList)
-	}
+	listView := m.podcastEpisodeList.View(width-2, listHeight, m.focus == focusList)
 	if m.podcastSearching {
 		listView = ui.MutedStyle.Render("Searching...")
 	}
 	content := searchLine + "\n\n" + listView
 	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(content)
+}
+
+func (m model) renderPodcastPreview(height, width int) string {
+	innerH := height - 2
+	if innerH < 1 {
+		innerH = 1
+	}
+	listView := m.podcastEpisodeList.View(width-2, innerH, m.focus == focusList)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
 }
 
 func (m model) renderPodcastSubscriptions(height, width int) string {
@@ -1829,11 +1876,9 @@ func (m model) hintText() string {
 		if m.focus == focusSearch {
 			return kv("Enter", "search") + "  " + kv("Esc", "cancel")
 		}
-		if m.podcastPreviewFeed != nil {
-			parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("A", "subscribe"), kv("Esc", "back"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
-		} else {
-			parts = []string{kv("↑↓", "navigate"), kv("Enter", "preview"), kv("A", "subscribe"), kv("/", "search"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
-		}
+		parts = []string{kv("↑↓", "navigate"), kv("Enter", "preview"), kv("A", "subscribe"), kv("/", "search"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+	case viewPodcastPreview:
+		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("A", "subscribe"), kv("Esc", "back"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
 	case viewPodcastSubscriptions:
 		parts = []string{kv("↑↓", "navigate"), kv("Enter", "episodes"), kv("A", "add"), kv("D", "delete"), kv("R", "refresh"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
 	case viewPodcastEpisodes:
@@ -2024,6 +2069,70 @@ func (m model) buildPodcastEpisodeItems(feed *podcast.Feed) []ui.ListItem {
 	return items
 }
 
+func (m model) buildPreviewItems(feed *podcast.Feed, width int) []ui.ListItem {
+	items := make([]ui.ListItem, 0)
+
+	// Title as a header so it is rendered prominently and skipped on navigation.
+	items = append(items, ui.ListItem{
+		Name:     "Preview: " + feed.Title,
+		IsHeader: true,
+	})
+
+	// Blank line after title.
+	items = append(items, ui.ListItem{Name: "", Kind: ui.KindPreviewInfo})
+
+	// Full description, word-wrapped to the available width.
+	for _, line := range wrapLines(feed.Description, width) {
+		items = append(items, ui.ListItem{
+			Name: line,
+			Kind: ui.KindPreviewInfo,
+		})
+	}
+
+	// Metadata line.
+	updated := formatDate(feed.LastFetched)
+	if updated == "?" {
+		updated = "never"
+	}
+	epCount := len(feed.Episodes)
+	meta := fmt.Sprintf("Latest %d of %d episodes", min(epCount, 10), epCount)
+	if len(feed.Categories) > 0 {
+		meta += " · " + strings.Join(feed.Categories, ", ")
+	}
+	meta += " · Updated: " + updated
+	items = append(items, ui.ListItem{
+		Name: meta,
+		Kind: ui.KindPreviewMeta,
+	})
+
+	// Separator between metadata and episodes.
+	sep := strings.Repeat("─", max(width, 1))
+	items = append(items, ui.ListItem{Name: sep, Kind: ui.KindPreviewMeta})
+
+	// Latest 10 episodes, newest first.
+	eps := make([]podcast.Episode, len(feed.Episodes))
+	copy(eps, feed.Episodes)
+	sort.Slice(eps, func(i, j int) bool {
+		return eps[i].PubDate.After(eps[j].PubDate)
+	})
+	if len(eps) > 10 {
+		eps = eps[:10]
+	}
+	for i := range eps {
+		ep := &eps[i]
+		items = append(items, ui.ListItem{
+			Name:     ep.Title,
+			Duration: formatDuration(ep.Duration),
+			Date:     formatDate(ep.PubDate),
+			Status:   "●",
+			FeedURL:  feed.URL,
+			URL:      ep.URL,
+			Kind:     ui.KindPodcastEpisode,
+		})
+	}
+	return items
+}
+
 func (m model) buildNewEpisodeItems() []ui.ListItem {
 	items := make([]ui.ListItem, 0)
 	for i := range m.podcasts {
@@ -2170,6 +2279,81 @@ func formatDate(t time.Time) string {
 		return "?"
 	}
 	return t.Format("2006-01-02")
+}
+
+// wrapLines word-wraps s into lines of at most width display cells. Existing
+// newlines are preserved as paragraph breaks, and words longer than width are
+// hard-truncated so nothing is silently lost at the right edge.
+func wrapLines(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			lines = append(lines, "")
+			continue
+		}
+
+		words := strings.Fields(para)
+		var b strings.Builder
+		currentW := 0
+
+		for _, w := range words {
+			ww := runewidth.StringWidth(w)
+			// Hard-truncate a word that cannot fit on a line by itself.
+			if ww > width {
+				if b.Len() > 0 {
+					lines = append(lines, b.String())
+					b.Reset()
+					currentW = 0
+				}
+				lines = append(lines, runewidth.Truncate(w, width, ""))
+				continue
+			}
+
+			space := 0
+			if b.Len() > 0 {
+				space = 1
+			}
+			if currentW+space+ww > width {
+				lines = append(lines, b.String())
+				b.Reset()
+				currentW = 0
+				space = 0
+			}
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+				currentW++
+			}
+			b.WriteString(w)
+			currentW += ww
+		}
+		if b.Len() > 0 {
+			lines = append(lines, b.String())
+		}
+	}
+	return lines
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func mergeEpisodes(fetched []podcast.Episode, existing []podcast.Episode) []podcast.Episode {

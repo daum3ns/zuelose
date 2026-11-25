@@ -7,6 +7,7 @@ const (
 	viewRadioBrowse              view = "radio-browse"
 	viewRadioFavourites          view = "radio-favourites"
 	viewPodcastSearch            view = "podcast-search"
+	viewPodcastPreview           view = "podcast-preview"
 	viewPodcastSubscriptions     view = "podcast-subscriptions"
 	viewPodcastEpisodes          view = "podcast-episodes"
 	viewPodcastNewEpisodes       view = "podcast-new-episodes"

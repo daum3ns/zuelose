@@ -189,10 +189,14 @@ func publishedTime(item *gofeed.Item) time.Time {
 }
 
 func stripHTML(s string) string {
-	// Very basic HTML stripping for readability.
-	out := strings.ReplaceAll(s, "<p>", "\n")
-	out = strings.ReplaceAll(out, "</p>", "")
-	out = strings.ReplaceAll(out, "<br>", "\n")
-	out = strings.ReplaceAll(out, "<br/>", "\n")
+	// Basic HTML stripping for readability.
+	replacements := []string{
+		"<p>", "\n", "</p>", "",
+		"<br>", "\n", "<br/>", "\n", "<br />", "\n",
+		"<li>", "\n- ", "</li>", "",
+		"<div>", "\n", "</div>", "",
+		"&nbsp;", " ", "&amp;", "&", "&lt;", "<", "&gt;", ">", "&quot;", "\"",
+	}
+	out := strings.NewReplacer(replacements...).Replace(s)
 	return strings.TrimSpace(out)
 }
