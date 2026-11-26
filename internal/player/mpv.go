@@ -164,6 +164,7 @@ func (m *MPV) Play(media Media) {
 	}
 	m.mu.Unlock()
 	_ = m.writeCommand("loadfile", media.URL)
+	_ = m.writeCommand("set_property", "pause", false)
 	m.sendStatus()
 }
 
