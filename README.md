@@ -62,14 +62,16 @@ Favourites, subscriptions, and episode progress are saved automatically in the s
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Move up / down |
-| `Tab` | Cycle focus |
+| `Tab` / `Shift+Tab` | Next / previous pane |
 | `Enter` | Select / play |
-| `Esc` / `←` | Back / cancel |
-| `→` | Focus main panel |
+| `Esc` | Back / cancel / leave input |
+| `←` / `→` | Previous / next pane (when not typing) |
 | `Space` | Pause / resume |
 | `+` / `-` | Volume up / down |
 | `q` / `Ctrl+c` | Quit |
 | `?` | Help overlay |
+
+Letter shortcuts are case-insensitive.
 
 ### Playback
 
@@ -81,6 +83,7 @@ These are shown in the now-playing pane when media is active:
 | `Space` | Connect / disconnect (radio streams) |
 | `Shift+←` / `Shift+→` | Seek ±10 s (podcasts) |
 | `Shift+↑` / `Shift+↓` | Seek ±60 s (podcasts) |
+| `+` / `-` | Volume up / down |
 
 ### Radio
 
@@ -94,8 +97,8 @@ These are shown in the now-playing pane when media is active:
 
 | Key | Action |
 |-----|--------|
-| `f` | Edit favourite |
-| `d` | Delete favourite |
+| `f` | Edit favourite category |
+| `d` | Remove favourite |
 | `c` | Create category |
 
 ### Podcasts
@@ -108,7 +111,14 @@ These are shown in the now-playing pane when media is active:
 | `d` | Delete subscription |
 | `r` | Refresh |
 
-In the podcast preview, `Enter` plays the selected episode, `A` subscribes, and `Esc` returns to the search results.
+In the podcast preview, `Enter` plays the selected episode, `a` subscribes, `/` returns to search, and `Esc` goes back to the search results.
+
+### Settings
+
+| Key | Action |
+|-----|--------|
+| `Enter` / `e` | Edit or cycle setting |
+| `Esc` | Focus sidebar |
 
 ## Dependencies
 

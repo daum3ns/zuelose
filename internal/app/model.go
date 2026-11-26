@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/common-nighthawk/go-figure"
@@ -153,6 +154,7 @@ type model struct {
 	pausedBlink    bool
 	errMsg         string
 	help           bool
+	helpViewport   viewport.Model
 
 	// Feedback toast.
 	toast   string
@@ -231,6 +233,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeInputs()
+		if m.help {
+			m.resizeHelpViewport()
+		}
 		return m, nil
 
 	case player.StatusMsg:
@@ -373,10 +378,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.help {
-			if msg.String() == "?" || msg.Type == tea.KeyEsc || msg.String() == "q" {
-				m.help = false
-			}
-			return m, nil
+			return m.updateHelp(msg)
 		}
 		if m.saving {
 			return m.updateSaveDialog(msg)
@@ -428,8 +430,14 @@ func (m model) View() string {
 	screen := lipgloss.JoinVertical(lipgloss.Left, header, hintBar, body, footer)
 
 	if m.help {
-		overlay := ui.HelpText()
-		screen = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+		helpBox := lipgloss.NewStyle().
+			Background(ui.ColorSurface()).
+			Foreground(ui.ColorText()).
+			Padding(1, 2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ui.ColorPrimary()).
+			Render(m.helpViewport.View())
+		screen = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, helpBox)
 	}
 
 	if m.saving {
@@ -458,6 +466,47 @@ func (m model) View() string {
 	}
 
 	return screen
+}
+
+func (m *model) openHelp() {
+	m.help = true
+	m.resizeHelpViewport()
+	m.helpViewport.SetContent(ui.HelpText())
+	m.helpViewport.GotoTop()
+}
+
+func (m *model) resizeHelpViewport() {
+	width := m.width - 6   // border (2) + horizontal padding (4)
+	height := m.height - 4 // border (2) + vertical padding (2)
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	m.helpViewport.Width = width
+	m.helpViewport.Height = height
+	m.helpViewport.SetContent(ui.HelpText())
+}
+
+func (m model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch strings.ToLower(msg.String()) {
+	case "?", "esc", "q":
+		m.help = false
+	case "up", "k":
+		m.helpViewport.ScrollUp(1)
+	case "down", "j":
+		m.helpViewport.ScrollDown(1)
+	case "pgup":
+		m.helpViewport.ScrollUp(m.helpViewport.Height)
+	case "pgdown", " ":
+		m.helpViewport.ScrollDown(m.helpViewport.Height)
+	case "home":
+		m.helpViewport.GotoTop()
+	case "end":
+		m.helpViewport.GotoBottom()
+	}
+	return m, nil
 }
 
 // --- Commands ---
@@ -528,7 +577,7 @@ func blinkCmd() tea.Cmd {
 // --- Update helpers ---
 
 func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := msg.String()
+	k := strings.ToLower(msg.String())
 	m.errMsg = ""
 
 	switch msg.Type {
@@ -546,7 +595,7 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "left":
 			return m.cyclePane(-1)
 		case "?":
-			m.help = true
+			m.openHelp()
 			return m, nil
 		case "q", "ctrl+c":
 			_ = m.savePodcasts()
@@ -833,7 +882,7 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	k := msg.String()
+	k := strings.ToLower(msg.String())
 
 	// Settings uses its own cursor, not a list.
 	if m.view == viewSettings {
@@ -911,7 +960,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteSelectedFavourite()
 		case "f":
 			return m.openSaveDialog(true)
-		case "C":
+		case "c":
 			m.creatingCategory = true
 			m.catInput.Focus()
 			m.catInput.SetValue("")
@@ -1178,7 +1227,7 @@ func (m model) resumeSelectedEpisode() (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateResumePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch strings.ToLower(msg.String()) {
 	case "r":
 		m.resumePrompt = nil
 		return m.playSelectedEpisode(false, true)
@@ -1498,6 +1547,9 @@ func (m model) renderHeader(height int) string {
 	}
 	titleLine := runewidth.Truncate(strings.Repeat(" ", padding)+title, innerW, "")
 	sepLine := strings.Repeat("─", innerW)
+	if m.toast != "" {
+		sepLine = lipgloss.NewStyle().Foreground(ui.ColorSuccess()).Render(runewidth.Truncate(m.toast, innerW, ""))
+	}
 
 	content := titleLine + "\n" + sepLine
 	return ui.HeaderStyle.Height(height).MaxHeight(height).Width(m.width).Render(content)
@@ -1531,11 +1583,15 @@ func (m model) renderFooter(height int) string {
 	playbackHints := ""
 	if m.status.Media.URL != "" {
 		if m.status.Media.IsPodcast {
-			playbackHints = "Space pause · Shift+←→ seek"
+			action := "pause"
+			if m.status.Paused {
+				action = "resume"
+			}
+			playbackHints = fmt.Sprintf("Space %s · Shift+arrows seek · +/- vol", action)
 		} else if m.status.Playing {
-			playbackHints = "Space disconnect"
+			playbackHints = "Space disconnect · +/- vol"
 		} else {
-			playbackHints = "Space connect"
+			playbackHints = "Space connect · +/- vol"
 		}
 	}
 
@@ -2023,48 +2079,53 @@ func (m model) hintText() string {
 	kv := func(key, desc string) string {
 		return keyStyle.Render(key+":") + " " + descStyle.Render(desc)
 	}
+	withGlobal := func(parts ...string) []string {
+		return append(parts, kv("?", "help"), kv("q", "quit"))
+	}
 
 	if m.focus == focusSidebar {
-		return kv("↑↓", "navigate") + "  " + kv("→", "main panel") + "  " + kv("Enter", "select") + "  " + kv("?", "help") + "  " + kv("Q", "quit")
+		return strings.Join(withGlobal(
+			kv("↑↓", "move"),
+			kv("Enter", "select"),
+			kv("Esc", "main"),
+			kv("Tab", "panes"),
+		), "  ")
 	}
 
 	var parts []string
 	switch m.view {
 	case viewRadioBrowse:
 		if m.focus == focusSearch {
-			return kv("Enter", "search") + "  " + kv("Esc", "cancel")
+			return kv("Enter", "search") + "  " + kv("Esc", "list") + "  " + kv("Tab", "next pane")
 		}
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("F", "save"), kv("/", "search"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "play"), kv("f", "save"), kv("/", "find"), kv("r", "refresh"), kv("Esc", "back")}
 	case viewRadioFavourites:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("F", "edit"), kv("D", "delete"), kv("C", "category"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "play"), kv("f", "edit"), kv("d", "remove"), kv("c", "new"), kv("Esc", "back")}
 	case viewPodcastSearch:
 		if m.focus == focusSearch {
-			return kv("Enter", "search") + "  " + kv("Esc", "cancel")
+			return kv("Enter", "search") + "  " + kv("Esc", "list") + "  " + kv("Tab", "next pane")
 		}
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "preview"), kv("A", "subscribe"), kv("/", "search"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "preview"), kv("a", "subscribe"), kv("/", "search"), kv("Esc", "back")}
 	case viewPodcastPreview:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("A", "subscribe"), kv("Esc", "back"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "play"), kv("a", "subscribe"), kv("/", "search"), kv("Esc", "back")}
 	case viewPodcastSubscriptions:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "episodes"), kv("A", "add"), kv("D", "delete"), kv("R", "refresh"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "open"), kv("a", "add"), kv("d", "remove"), kv("r", "reload"), kv("Esc", "back")}
 	case viewPodcastEpisodes:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("R", "resume"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "play"), kv("r", "resume"), kv("Esc", "subscriptions")}
 	case viewPodcastNewEpisodes:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "play"), kv("R", "refresh"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "play"), kv("r", "refresh"), kv("Esc", "back")}
 	case viewPodcastContinueListening:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "resume"), kv("R", "refresh"), kv("+", "vol up"), kv("-", "vol down"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter", "resume"), kv("r", "refresh"), kv("Esc", "back")}
 	case viewSettings:
-		parts = []string{kv("↑↓", "navigate"), kv("Enter", "edit/cycle"), kv("?", "help"), kv("Q", "quit")}
+		parts = []string{kv("↑↓", "move"), kv("Enter/e", "edit"), kv("Esc", "back")}
 	default:
-		return kv("?", "help") + "  " + kv("Q", "quit")
+		parts = nil
 	}
-	return strings.Join(parts, "  ")
+	return strings.Join(withGlobal(parts...), "  ")
 }
 
 func (m model) renderHintBar(height int) string {
 	content := m.hintText()
-	if m.toast != "" {
-		content = ui.CategoryStyle.Render(m.toast)
-	}
 	return lipgloss.NewStyle().
 		Height(height).
 		MaxHeight(height).
@@ -2129,7 +2190,7 @@ func (m model) renderAddPodcastDialog() string {
 func (m model) renderResumePrompt() string {
 	title := "Resume episode?"
 	content := ui.CategoryStyle.Render(title) + "\n\n" +
-		ui.MutedStyle.Render("R: resume  •  Enter/S: restart  •  Esc: cancel")
+		ui.MutedStyle.Render("r: resume  •  Enter/s: restart  •  Esc: cancel")
 
 	box := lipgloss.NewStyle().
 		Background(ui.ColorSurface()).

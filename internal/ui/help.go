@@ -1,58 +1,90 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
-
-// HelpText returns the keyboard shortcut overlay.
+// HelpText returns the complete keyboard reference shown in the scrollable help overlay.
 func HelpText() string {
-	text := `
-Navigation
-  ↑ / ↓        Move up / down in the focused pane
-  Tab          Next pane
-  Shift+Tab    Previous pane
-  ← / →        Previous / next pane (when not typing)
-  Enter        Activate selected item / play
-  Esc          Back / cancel
+	return `Global
+  ↑ / ↓          Move in the focused pane
+  Tab            Next pane
+  Shift+Tab      Previous pane
+  ← / →          Previous / next pane (when not typing)
+  Enter          Activate selected item
+  Esc            Back / cancel / leave input
+  ?              Toggle help
+  q / Ctrl+c     Quit
+  ● / ○          Focused / inactive pane
+
+  Letter shortcuts are case-insensitive.
 
 Playback
-  Space        Pause / resume (podcasts)
-  Space        Connect / disconnect (radio streams)
-  Shift+← / →  Seek ±10 s (podcasts)
-  Shift+↑ / ↓  Seek ±60 s (podcasts)
-  + / -        Volume up / down
+  Space          Pause / resume podcast
+  Space          Connect / disconnect radio stream
+  Shift+← / →    Seek ±10 s (podcasts)
+  Shift+↑ / ↓    Seek ±60 s (podcasts)
+  + / -          Volume up / down
 
-Radio
-  /            Focus search input
-  F            Add station to favourites
-  R            Refresh station list
+Radio Browse
+  /              Focus search input
+  Enter          Play selected station
+  f              Add station to favourites
+  r              Search / refresh results
+  Esc            Focus sidebar
 
 Radio Favourites
-  F            Add station to favourites / edit category
-  D            Delete favourite
-  C            Create category
+  Enter          Play selected favourite
+  f              Edit favourite category
+  d              Remove favourite
+  c              Create category
+  Esc            Focus sidebar
 
 Podcast Search
-  /            Focus search input
-  Enter        Preview episodes
-  A            Subscribe to selected podcast
+  /              Focus search input
+  Enter          Preview selected podcast
+  a              Subscribe to selected podcast
+  r              Search / refresh results
+  Esc            Focus sidebar
+
+Podcast Preview
+  Enter          Play selected episode
+  a              Subscribe to previewed podcast
+  /              Back to podcast search
+  Esc            Back to podcast search
 
 Podcast Subscriptions
-  A            Add podcast feed by URL
-  D            Delete subscription
-  Enter        Open subscription episodes
+  Enter          Open subscription episodes
+  a              Add podcast feed by URL
+  d              Unsubscribe
+  r              Refresh subscriptions
+  Esc            Focus sidebar
 
 Podcast Episodes
-  Enter        Play episode (prompts if resumable)
-  R            Resume episode from saved position
+  Enter          Play episode (prompts if resumable)
+  r              Resume selected episode
+  Esc            Back to subscriptions
 
-Other
-  ?            Toggle this help
-  Q            Quit
+New Episodes
+  Enter          Play selected episode
+  r              Refresh subscriptions
+  Esc            Focus sidebar
+
+Continue Listening
+  Enter          Resume selected episode
+  r              Refresh subscriptions
+  Esc            Focus sidebar
+
+Settings
+  Enter / e      Edit or cycle setting
+  Esc            Focus sidebar
+
+Dialogs
+  Enter          Confirm / save / fetch
+  Esc            Cancel
+  Tab            Complete category (save favourite)
+  r / s          Resume / restart (resume prompt)
+
+Help navigation
+  ↑ / ↓ or j/k   Scroll one line
+  PgUp / PgDn    Scroll one page
+  Home / End     Jump to top / bottom
+  Esc / ? / q    Close help
 `
-	box := lipgloss.NewStyle().
-		Background(ColorSurface()).
-		Foreground(ColorText()).
-		Padding(1, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary())
-	return box.Render(text)
 }

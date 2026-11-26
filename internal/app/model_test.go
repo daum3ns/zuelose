@@ -764,3 +764,139 @@ func TestBodyWidthMatchesTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestLetterShortcutsAreCaseInsensitive(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.openHelp()
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Q'}})
+	if m.help {
+		t.Fatal("expected uppercase Q to close help")
+	}
+
+	m.favs = store.Favourites{Categories: []store.Category{
+		{Name: "Music", Stations: []store.FavStation{{Station: store.Station{Name: "First"}}}},
+	}}
+	m = activate(m, viewRadioFavourites)
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	if len(m.favs.Categories) != 0 {
+		t.Fatal("expected uppercase D to remove the favourite")
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'C'}})
+	if !m.creatingCategory {
+		t.Fatal("expected uppercase C to open create-category dialog")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if !m.creatingCategory {
+		t.Fatal("expected lowercase c to open create-category dialog")
+	}
+}
+
+func TestSearchEscLeavesInputWithoutCancelling(t *testing.T) {
+	for _, v := range []view{viewRadioBrowse, viewPodcastSearch} {
+		m, _, _ := newTestModel(t)
+		m = activate(m, v)
+		if v == viewRadioBrowse {
+			m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+			m.query.SetValue("abc")
+		} else {
+			m.podcastQuery.SetValue("abc")
+		}
+
+		m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if m.focus != focusList {
+			t.Fatalf("%s: expected list focus after Esc, got %d", v, m.focus)
+		}
+		if v == viewRadioBrowse && m.query.Value() != "abc" {
+			t.Fatalf("%s: expected query to remain unchanged", v)
+		}
+		if v == viewPodcastSearch && m.podcastQuery.Value() != "abc" {
+			t.Fatalf("%s: expected query to remain unchanged", v)
+		}
+	}
+}
+
+func TestHintTextFits80Columns(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	cases := []struct {
+		view  view
+		focus focusArea
+	}{
+		{viewRadioBrowse, focusList},
+		{viewRadioBrowse, focusSearch},
+		{viewRadioFavourites, focusList},
+		{viewPodcastSearch, focusList},
+		{viewPodcastSearch, focusSearch},
+		{viewPodcastPreview, focusList},
+		{viewPodcastSubscriptions, focusList},
+		{viewPodcastEpisodes, focusList},
+		{viewPodcastNewEpisodes, focusList},
+		{viewPodcastContinueListening, focusList},
+		{viewSettings, focusList},
+		{viewRadioBrowse, focusSidebar},
+	}
+	for _, tc := range cases {
+		m.view = tc.view
+		m.focus = tc.focus
+		if w := lipgloss.Width(m.hintText()); w > 80 {
+			t.Errorf("%s focus %d: hint width %d exceeds 80: %q", tc.view, tc.focus, w, m.hintText())
+		}
+	}
+}
+
+func TestToastDoesNotReplaceHints(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.toast = "Saved to favourites"
+
+	if hint := m.renderHintBar(1); !strings.Contains(hint, "Enter:") {
+		t.Fatalf("expected navigation hints to remain visible, got %q", hint)
+	}
+	if header := m.renderHeader(2); !strings.Contains(header, "Saved to favourites") {
+		t.Fatalf("expected toast in header, got %q", header)
+	}
+}
+
+func TestHelpViewportFitsTerminalAndScrolls(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.openHelp()
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 24 {
+		t.Fatalf("expected help overlay height 24, got %d", len(lines))
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w != 80 {
+			t.Fatalf("help line %d has width %d, want 80", i, w)
+		}
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.helpViewport.YOffset == 0 {
+		t.Fatal("expected Down to scroll help")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnd})
+	if m.helpViewport.YOffset == 0 {
+		t.Fatal("expected End to jump help to bottom")
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.help {
+		t.Fatal("expected Esc to close help")
+	}
+}
+
+func TestFooterPlaybackHintTracksPauseState(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.status.Media = player.Media{Name: "Episode", URL: "http://ep", IsPodcast: true}
+	m.status.Playing = true
+	m.status.Paused = false
+	if footer := m.renderFooter(7); !strings.Contains(footer, "Space pause") {
+		t.Fatalf("expected pause hint while playing, got %q", footer)
+	}
+
+	m.status.Paused = true
+	if footer := m.renderFooter(7); !strings.Contains(footer, "Space resume") {
+		t.Fatalf("expected resume hint while paused, got %q", footer)
+	}
+}
