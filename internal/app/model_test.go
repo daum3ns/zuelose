@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/daum3ns/zuelose/internal/player"
 	"github.com/daum3ns/zuelose/internal/podcast"
@@ -15,23 +17,27 @@ import (
 )
 
 type fakePlayer struct {
-	played      []player.Media
-	paused      bool
-	volume      int
-	started     bool
-	seeked      []float64
-	toggleCnt   int
+	played       []player.Media
+	paused       bool
+	volume       int
+	started      bool
+	seeked       []float64
+	toggleCnt    int
 	currentMedia player.Media
-	playing     bool
+	playing      bool
 }
 
-func (f *fakePlayer) Start() error        { f.started = true; return nil }
-func (f *fakePlayer) Play(m player.Media) { f.played = append(f.played, m); f.currentMedia = m; f.playing = true }
-func (f *fakePlayer) Stop()               { f.playing = false }
+func (f *fakePlayer) Start() error { f.started = true; return nil }
+func (f *fakePlayer) Play(m player.Media) {
+	f.played = append(f.played, m)
+	f.currentMedia = m
+	f.playing = true
+}
+func (f *fakePlayer) Stop()                { f.playing = false }
 func (f *fakePlayer) Seek(seconds float64) { f.seeked = append(f.seeked, seconds) }
-func (f *fakePlayer) VolumeUp()           { f.volume += 5 }
-func (f *fakePlayer) VolumeDown()         { f.volume -= 5 }
-func (f *fakePlayer) SetVolume(v int)     { f.volume = v }
+func (f *fakePlayer) VolumeUp()            { f.volume += 5 }
+func (f *fakePlayer) VolumeDown()          { f.volume -= 5 }
+func (f *fakePlayer) SetVolume(v int)      { f.volume = v }
 func (f *fakePlayer) TogglePause() {
 	f.toggleCnt++
 	if f.currentMedia.URL == "" {
@@ -328,6 +334,91 @@ func TestSettingsNavigation(t *testing.T) {
 	}
 }
 
+func TestTabCyclesPanes(t *testing.T) {
+	m, _, _ := newTestModel(t)
+
+	// Main -> Sidebar -> Main.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != focusList {
+		t.Fatalf("expected main list focus, got %d", m.focus)
+	}
+
+	// Shift+Tab reverses the cycle.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus from Shift+Tab, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focus != focusList {
+		t.Fatalf("expected main list focus from Shift+Tab, got %d", m.focus)
+	}
+}
+
+func TestTabRestoresMainSearchFocus(t *testing.T) {
+	m, _, _ := newTestModel(t)
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if m.focus != focusSearch {
+		t.Fatalf("expected search focus, got %d", m.focus)
+	}
+
+	// Main -> Sidebar -> Main should restore the search focus.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.focus != focusSearch {
+		t.Fatalf("expected search focus restored, got %d", m.focus)
+	}
+}
+
+func TestArrowKeysCyclePanes(t *testing.T) {
+	m, _, _ := newTestModel(t)
+
+	// Main -> Sidebar -> Main.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus from Left, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.focus != focusList {
+		t.Fatalf("expected main list focus from Right, got %d", m.focus)
+	}
+
+	// Left from Sidebar wraps around to Main.
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != focusSidebar {
+		t.Fatalf("expected sidebar focus from Left, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != focusList {
+		t.Fatalf("expected main list focus from wrapping Left, got %d", m.focus)
+	}
+}
+
+func TestArrowsInSearchMoveCursor(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if m.focus != focusSearch {
+		t.Fatalf("expected search focus, got %d", m.focus)
+	}
+
+	m.query.SetValue("abc")
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.focus != focusSearch {
+		t.Fatalf("Left changed pane while typing, got %d", m.focus)
+	}
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyRight})
+	if m.focus != focusSearch {
+		t.Fatalf("Right changed pane while typing, got %d", m.focus)
+	}
+}
+
 func TestPodcastSearchEnterPreviews(t *testing.T) {
 	m, _, _ := newTestModel(t)
 	m = activate(m, viewPodcastSearch)
@@ -342,6 +433,65 @@ func TestPodcastSearchEnterPreviews(t *testing.T) {
 	}
 	if m.podcastPreviewFeed == nil {
 		t.Fatal("expected feed preview to start")
+	}
+}
+
+func TestPodcastRefreshDoesNotToast(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.podcasts = []podcast.Feed{{Title: "Show", URL: "http://feed"}}
+	m.view = viewPodcastSubscriptions
+
+	m = updateModel(m, podcastFeedMsg{
+		feed:      &podcast.Feed{Title: "Show", URL: "http://feed"},
+		subscribe: true,
+	})
+
+	if m.toast != "" {
+		t.Fatalf("expected no toast on refresh, got %q", m.toast)
+	}
+	if m.view != viewPodcastSubscriptions {
+		t.Fatalf("expected subscriptions view, got %s", m.view)
+	}
+	if len(m.podcasts) != 1 {
+		t.Fatalf("expected 1 feed, got %d", len(m.podcasts))
+	}
+}
+
+func TestPodcastRefreshDoesNotChangeSearchView(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.podcasts = []podcast.Feed{{Title: "Show", URL: "http://feed"}}
+	m = activate(m, viewPodcastSearch)
+
+	m = updateModel(m, podcastFeedMsg{
+		feed:      &podcast.Feed{Title: "Show", URL: "http://feed"},
+		subscribe: true,
+	})
+
+	if m.view != viewPodcastSearch {
+		t.Fatalf("expected search view to stay, got %s", m.view)
+	}
+	if m.toast != "" {
+		t.Fatalf("expected no toast on refresh, got %q", m.toast)
+	}
+}
+
+func TestPodcastSubscribeToasts(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = activate(m, viewPodcastSearch)
+
+	m = updateModel(m, podcastFeedMsg{
+		feed:      &podcast.Feed{Title: "Fresh Show", URL: "http://fresh"},
+		subscribe: true,
+	})
+
+	if m.toast != "Subscribed to Fresh Show" {
+		t.Fatalf("expected subscribe toast, got %q", m.toast)
+	}
+	if m.view != viewPodcastNewEpisodes {
+		t.Fatalf("expected new episodes view, got %s", m.view)
+	}
+	if len(m.podcasts) != 1 {
+		t.Fatalf("expected 1 feed, got %d", len(m.podcasts))
 	}
 }
 
@@ -552,5 +702,40 @@ func TestRadioSpaceConnectsAndDisconnects(t *testing.T) {
 	m = updateModel(m, tea.KeyMsg{Type: tea.KeySpace})
 	if len(fp.played) != playedBefore+1 {
 		t.Fatalf("expected radio to reconnect, played count %d", len(fp.played))
+	}
+}
+
+func TestPodcastEpisodesEscReturnsToSubscriptions(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.podcasts = []podcast.Feed{
+		{Title: "First", URL: "http://first", Episodes: []podcast.Episode{{Title: "One"}}},
+		{Title: "Second", URL: "http://second", Episodes: []podcast.Episode{{Title: "Two"}}},
+	}
+	m = activate(m, viewPodcastSubscriptions)
+	m.podcastEpisodeList.Cursor = 1
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.view != viewPodcastEpisodes {
+		t.Fatalf("expected episodes view, got %s", m.view)
+	}
+
+	m = updateModel(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.view != viewPodcastSubscriptions {
+		t.Fatalf("expected subscriptions view after Esc, got %s", m.view)
+	}
+	if m.podcastEpisodeList.Cursor != 1 {
+		t.Fatalf("expected subscription cursor restored to 1, got %d", m.podcastEpisodeList.Cursor)
+	}
+}
+
+func TestBodyWidthMatchesTerminal(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m = updateModel(m, tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	view := m.View()
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w != 100 {
+			t.Fatalf("line %d has width %d, want 100: %q", i, w, line)
+		}
 	}
 }

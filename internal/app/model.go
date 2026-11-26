@@ -42,6 +42,13 @@ const (
 	focusList
 )
 
+type pane int
+
+const (
+	paneSidebar pane = iota
+	paneMain
+)
+
 type resumePrompt struct {
 	feedURL    string
 	episodeURL string
@@ -101,14 +108,15 @@ type model struct {
 
 	view          view
 	focus         focusArea
+	lastMainFocus focusArea
 	sidebarItems  []sidebarItem
 	sidebarCursor int
 
 	// Radio browse.
-	query      textinput.Model
-	searching  bool
-	stations   []store.Station
-	list       ui.List
+	query     textinput.Model
+	searching bool
+	stations  []store.Station
+	list      ui.List
 
 	// Podcasts.
 	podcastQuery         textinput.Model
@@ -118,8 +126,9 @@ type model struct {
 	podcastSelectedFeed  *podcast.Feed
 	podcastPreviewFeed   *podcast.Feed
 	podcastEpisodeList   ui.List
-	addingPodcast   bool
-	resumePrompt    *resumePrompt
+	subscriptionCursor   int
+	addingPodcast        bool
+	resumePrompt         *resumePrompt
 
 	// Create category dialog.
 	creatingCategory bool
@@ -185,6 +194,7 @@ func NewModel(cfg store.Config, favs store.Favourites, mpv Player, client RadioC
 		player:          mpv,
 		view:            viewRadioBrowse,
 		focus:           focusList,
+		lastMainFocus:   focusList,
 		sidebarItems:    items,
 		sidebarCursor:   cursor,
 		query:           q,
@@ -307,32 +317,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
-			if existingIdx >= 0 {
-				// Preserve episode state.
+			isNew := existingIdx < 0
+			if isNew {
+				m.podcasts = append(m.podcasts, *feed)
+			} else {
+				// Preserve episode state on refresh.
 				feed.Episodes = mergeEpisodes(feed.Episodes, m.podcasts[existingIdx].Episodes)
 				m.podcasts[existingIdx] = *feed
-			} else {
-				m.podcasts = append(m.podcasts, *feed)
 			}
 			_ = m.savePodcasts()
 			m.podcastSelectedFeed = feed
 			if m.view == viewPodcastSubscriptions {
 				m.podcastEpisodeList.Items = m.buildSubscriptionItems()
 			}
-			if m.view == viewPodcastSearch {
-				m.view = viewPodcastNewEpisodes
-				m.focus = focusList
-				m.podcastEpisodeList.Items = m.buildNewEpisodeItems()
-			}
-			if m.view == viewPodcastPreview {
-				m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.width-24-2)
-				m.podcastEpisodeList.SelectFirst()
-			}
 			if m.view == viewPodcastNewEpisodes {
 				m.podcastEpisodeList.Items = m.buildNewEpisodeItems()
 			}
 			if m.view == viewPodcastContinueListening {
 				m.podcastEpisodeList.Items = m.buildContinueListeningItems()
+			}
+			if m.view == viewPodcastPreview && m.podcastPreviewFeed != nil && m.podcastPreviewFeed.URL == feed.URL {
+				m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.mainContentWidth())
+				m.podcastEpisodeList.SelectFirst()
+			}
+			if !isNew {
+				// Background refresh of an existing feed: no toast, no view change.
+				return m, nil
+			}
+			if m.view == viewPodcastSearch {
+				m.view = viewPodcastNewEpisodes
+				m.focus = focusList
+				m.podcastEpisodeList.Items = m.buildNewEpisodeItems()
 			}
 			return m.showToast("Subscribed to " + feed.Title)
 		} else {
@@ -341,11 +356,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view = viewPodcastPreview
 			m.focus = focusList
 			// The list is rendered inside the main pane; use its inner width.
-			listWidth := m.width - 24 - 2
-			if listWidth < 10 {
-				listWidth = 10
-			}
-			m.podcastEpisodeList.Items = m.buildPreviewItems(feed, listWidth)
+			m.podcastEpisodeList.Items = m.buildPreviewItems(feed, m.mainContentWidth())
 			m.podcastEpisodeList.SelectFirst()
 		}
 		return m, nil
@@ -520,9 +531,20 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := msg.String()
 	m.errMsg = ""
 
+	switch msg.Type {
+	case tea.KeyTab:
+		return m.cyclePane(1)
+	case tea.KeyShiftTab:
+		return m.cyclePane(-1)
+	}
+
 	// Global controls (unless typing in a text field).
 	if !m.anyInputFocused() {
 		switch k {
+		case "right":
+			return m.cyclePane(1)
+		case "left":
+			return m.cyclePane(-1)
 		case "?":
 			m.help = true
 			return m, nil
@@ -590,6 +612,87 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) activePane() pane {
+	switch m.focus {
+	case focusSidebar:
+		return paneSidebar
+	default:
+		return paneMain
+	}
+}
+
+func (m model) paneBorderColor(p pane) lipgloss.Color {
+	if m.activePane() == p {
+		return ui.ColorPrimary()
+	}
+	return ui.ColorMuted()
+}
+
+// withDotBorder replaces a rendered pane's top border with a dot marker
+// indicating whether the pane is focused.
+func (m model) withDotBorder(view string, p pane) string {
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 {
+		return view
+	}
+	marker := "○"
+	if m.activePane() == p {
+		marker = "●"
+	}
+	fill := lipgloss.Width(lines[0]) - 6 // "╭─ ● " + fill + "╮"
+	if fill < 0 {
+		fill = 0
+	}
+	top := lipgloss.NewStyle().
+		Background(ui.ColorBg()).
+		Foreground(m.paneBorderColor(p)).
+		Render("╭─ " + marker + " " + strings.Repeat("─", fill) + "╮")
+	lines[0] = top
+	return strings.Join(lines, "\n")
+}
+
+func (m model) viewSupportsSearch() bool {
+	return m.view == viewRadioBrowse || m.view == viewPodcastSearch
+}
+
+func (m model) cyclePane(direction int) (tea.Model, tea.Cmd) {
+	if m.focus == focusSearch || m.focus == focusList {
+		m.lastMainFocus = m.focus
+	}
+
+	panes := []pane{paneSidebar, paneMain}
+
+	idx := 0
+	current := m.activePane()
+	for i, p := range panes {
+		if p == current {
+			idx = i
+			break
+		}
+	}
+	idx = (idx + direction + len(panes)) % len(panes)
+	return m.focusPane(panes[idx])
+}
+
+func (m model) focusPane(p pane) (tea.Model, tea.Cmd) {
+	switch p {
+	case paneSidebar:
+		m.blurAllInputs()
+		m.focus = focusSidebar
+		return m, nil
+	case paneMain:
+		m.blurAllInputs()
+		if m.lastMainFocus == focusSearch && m.viewSupportsSearch() {
+			m.focus = focusSearch
+			m.focusCurrentSearch()
+		} else {
+			m.focus = focusList
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
 func (m model) anyInputFocused() bool {
 	return m.query.Focused() ||
 		m.podcastQuery.Focused() ||
@@ -628,19 +731,6 @@ func (m model) updateSidebar(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !item.isHeader {
 			return m.activateView(item.v)
 		}
-	case tea.KeyTab:
-		if m.view == viewRadioBrowse || m.view == viewPodcastSearch {
-			m.focus = focusSearch
-			m.focusCurrentSearch()
-		} else {
-			m.focus = focusList
-			m.blurAllInputs()
-		}
-		return m, nil
-	case tea.KeyRight:
-		m.focus = focusList
-		m.blurAllInputs()
-		return m, nil
 	case tea.KeyEsc:
 		m.focus = focusList
 		m.blurAllInputs()
@@ -670,7 +760,7 @@ func (m model) activateView(v view) (tea.Model, tea.Cmd) {
 		m.focus = focusList
 		m.blurAllInputs()
 		if m.podcastPreviewFeed != nil {
-			m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.width-24-2)
+			m.podcastEpisodeList.Items = m.buildPreviewItems(m.podcastPreviewFeed, m.mainContentWidth())
 			m.podcastEpisodeList.SelectFirst()
 		}
 	case viewRadioFavourites:
@@ -694,6 +784,9 @@ func (m model) activateView(v view) (tea.Model, tea.Cmd) {
 		m.blurAllInputs()
 		m.podcastPreviewFeed = nil
 		m.podcastEpisodeList.Items = m.buildContinueListeningItems()
+	}
+	if m.focus == focusSearch || m.focus == focusList {
+		m.lastMainFocus = m.focus
 	}
 	return m, cmd
 }
@@ -723,7 +816,7 @@ func (m model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.blurAllInputs()
 		m.currentList().Down()
 		return m, nil
-	case tea.KeyEsc, tea.KeyTab:
+	case tea.KeyEsc:
 		m.focus = focusList
 		m.blurAllInputs()
 		return m, nil
@@ -766,7 +859,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.cycleTheme()
 			}
 			return m, nil
-		case "tab", "left", "esc":
+		case "esc":
 			m.focus = focusSidebar
 			m.blurAllInputs()
 			return m, nil
@@ -783,11 +876,24 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		return m.activateSelected()
-	case tea.KeyTab:
-		m.focus = focusSidebar
-		m.blurAllInputs()
-		return m, nil
-	case tea.KeyLeft:
+	case tea.KeyEsc:
+		switch m.view {
+		case viewPodcastPreview:
+			m.podcastPreviewFeed = nil
+			m.view = viewPodcastSearch
+			m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
+			m.podcastEpisodeList.Cursor = 0
+			return m, nil
+		case viewPodcastEpisodes:
+			m.view = viewPodcastSubscriptions
+			m.podcastEpisodeList.Items = m.buildSubscriptionItems()
+			if m.subscriptionCursor >= 0 && m.subscriptionCursor < len(m.podcastEpisodeList.Items) {
+				m.podcastEpisodeList.Cursor = m.subscriptionCursor
+			} else {
+				m.podcastEpisodeList.Cursor = 0
+			}
+			return m, nil
+		}
 		m.focus = focusSidebar
 		m.blurAllInputs()
 		return m, nil
@@ -804,7 +910,7 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.deleteSelectedFavourite()
 		case "f":
 			return m.openSaveDialog(true)
-		case "c":
+		case "C":
 			m.creatingCategory = true
 			m.catInput.Focus()
 			m.catInput.SetValue("")
@@ -819,12 +925,6 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch k {
 		case "a":
 			return m.subscribePreviewedFeed()
-		case "esc":
-			m.podcastPreviewFeed = nil
-			m.view = viewPodcastSearch
-			m.podcastEpisodeList.Items = m.buildPodcastSearchItems()
-			m.podcastEpisodeList.Cursor = 0
-			return m, nil
 		}
 	case viewPodcastSubscriptions:
 		switch k {
@@ -981,6 +1081,7 @@ func (m model) openSelectedSubscription() (tea.Model, tea.Cmd) {
 	}
 	feed := &m.podcasts[idx]
 	m.podcastSelectedFeed = feed
+	m.subscriptionCursor = idx
 	m.view = viewPodcastEpisodes
 	m.podcastEpisodeList.Items = m.buildPodcastEpisodeItems(feed)
 	return m, nil
@@ -1330,18 +1431,27 @@ func (m model) updateAddPodcastDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // --- View helpers ---
 
+// mainContentWidth returns the usable width inside the main pane's border.
+func (m model) mainContentWidth() int {
+	w := m.width - 24 - 2
+	if w < 10 {
+		w = 10
+	}
+	return w
+}
+
 func (m *model) resizeInputs() {
 	if m.width <= 30 {
 		return
 	}
-	// Main panel inner width, accounting for sidebar and border.
-	mainW := m.width - 24 - 2
-	if mainW < 10 {
-		mainW = 10
-	}
+	mainContentW := m.mainContentWidth()
 
-	m.query.Width = mainW - 10
-	m.podcastQuery.Width = mainW - 10
+	queryW := mainContentW - 10
+	if queryW < 1 {
+		queryW = 1
+	}
+	m.query.Width = queryW
+	m.podcastQuery.Width = queryW
 
 	// Save dialog: box width m.width-10, padding 2 on each side.
 	m.saveCat.Width = m.width - 14
@@ -1527,10 +1637,11 @@ func (m model) renderFooterWithLabel(height, innerW int, content string) string 
 		fill = 0
 	}
 
-	borderStyle := lipgloss.NewStyle().Background(ui.ColorBg()).Foreground(ui.ColorPrimary())
+	borderStyle := lipgloss.NewStyle().Background(ui.ColorBg()).Foreground(ui.ColorMuted())
+	labelStyle := lipgloss.NewStyle().Background(ui.ColorBg()).Foreground(ui.ColorPrimary())
 	contentBg := lipgloss.NewStyle().Background(ui.ColorBg())
 
-	top := borderStyle.Render("╭" + label + strings.Repeat("─", fill) + "╮")
+	top := borderStyle.Render("╭") + labelStyle.Render(label) + borderStyle.Render(strings.Repeat("─", fill)+"╮")
 	bottom := borderStyle.Render("╰" + strings.Repeat("─", innerW) + "╯")
 
 	contentLines := strings.Split(content, "\n")
@@ -1585,48 +1696,44 @@ func (m model) renderSidebar(height, width int) string {
 		lines = append(lines, style.Render(it.label))
 	}
 	content := strings.Join(lines, "\n")
-	borderColor := ui.ColorMuted()
-	if m.focus == focusSidebar {
-		borderColor = ui.ColorPrimary()
-	}
-	return ui.SidebarStyle.
-		BorderForeground(borderColor).
+	view := ui.SidebarStyle.
+		BorderForeground(m.paneBorderColor(paneSidebar)).
 		Height(height).
 		MaxHeight(height).
-		Width(width).
+		Width(width - 2).
 		Render(content)
+	return m.withDotBorder(view, paneSidebar)
 }
 
 func (m model) renderMain(height, width int) string {
+	var content string
 	switch m.view {
 	case viewRadioBrowse:
-		return m.renderBrowse(height, width)
+		content = m.renderBrowse(height, width)
 	case viewRadioFavourites:
-		return m.renderFavourites(height, width)
+		content = m.renderFavourites(height, width)
 	case viewPodcastSearch:
-		return m.renderPodcastSearch(height, width)
+		content = m.renderPodcastSearch(height, width)
 	case viewPodcastPreview:
-		return m.renderPodcastPreview(height, width)
+		content = m.renderPodcastPreview(height, width)
 	case viewPodcastSubscriptions:
-		return m.renderPodcastSubscriptions(height, width)
+		content = m.renderPodcastSubscriptions(height, width)
 	case viewPodcastEpisodes:
-		return m.renderPodcastEpisodes(height, width)
+		content = m.renderPodcastEpisodes(height, width)
 	case viewPodcastNewEpisodes:
-		return m.renderPodcastNewEpisodes(height, width)
+		content = m.renderPodcastNewEpisodes(height, width)
 	case viewPodcastContinueListening:
-		return m.renderPodcastContinueListening(height, width)
+		content = m.renderPodcastContinueListening(height, width)
 	case viewSettings:
-		return m.renderSettings(height, width)
+		content = m.renderSettings(height, width)
+	default:
+		return ""
 	}
-	return ""
+	return m.withDotBorder(content, paneMain)
 }
 
 func (m model) mainPanelStyle() lipgloss.Style {
-	borderColor := ui.ColorMuted()
-	if m.focus == focusSearch || m.focus == focusList {
-		borderColor = ui.ColorPrimary()
-	}
-	return ui.MainStyle.BorderForeground(borderColor)
+	return ui.MainStyle.BorderForeground(m.paneBorderColor(paneMain))
 }
 
 func (m model) renderBrowse(height, width int) string {
@@ -1645,7 +1752,7 @@ func (m model) renderBrowse(height, width int) string {
 		listView = ui.MutedStyle.Render("Searching...")
 	}
 	content := searchLine + "\n\n" + listView
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(content)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(content)
 }
 
 func (m model) renderFavourites(height, width int) string {
@@ -1654,7 +1761,7 @@ func (m model) renderFavourites(height, width int) string {
 		innerH = 1
 	}
 	listView := m.list.View(width-2, innerH, m.focus == focusList)
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) renderPodcastSearch(height, width int) string {
@@ -1674,7 +1781,7 @@ func (m model) renderPodcastSearch(height, width int) string {
 		listView = ui.MutedStyle.Render("Searching...")
 	}
 	content := searchLine + "\n\n" + listView
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(content)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(content)
 }
 
 func (m model) renderPodcastPreview(height, width int) string {
@@ -1683,7 +1790,7 @@ func (m model) renderPodcastPreview(height, width int) string {
 		innerH = 1
 	}
 	listView := m.podcastEpisodeList.View(width-2, innerH, m.focus == focusList)
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) renderPodcastSubscriptions(height, width int) string {
@@ -1692,7 +1799,7 @@ func (m model) renderPodcastSubscriptions(height, width int) string {
 		innerH = 1
 	}
 	listView := m.podcastEpisodeList.View(width-2, innerH, m.focus == focusList)
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) renderPodcastEpisodes(height, width int) string {
@@ -1701,7 +1808,7 @@ func (m model) renderPodcastEpisodes(height, width int) string {
 		innerH = 1
 	}
 	listView := m.podcastEpisodeList.View(width-2, innerH, m.focus == focusList)
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) renderPodcastNewEpisodes(height, width int) string {
@@ -1713,7 +1820,7 @@ func (m model) renderPodcastNewEpisodes(height, width int) string {
 	if len(m.podcastEpisodeList.Items) == 0 {
 		listView = ui.MutedStyle.Render("No new episodes.")
 	}
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) renderPodcastContinueListening(height, width int) string {
@@ -1725,7 +1832,7 @@ func (m model) renderPodcastContinueListening(height, width int) string {
 	if len(m.podcastEpisodeList.Items) == 0 {
 		listView = ui.MutedStyle.Render("No episodes in progress.")
 	}
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(listView)
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(listView)
 }
 
 func (m model) settingsCount() int {
@@ -1750,7 +1857,7 @@ func (m model) renderSettings(height, width int) string {
 		}
 		lines = append(lines, line)
 	}
-	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width).Render(strings.Join(lines, "\n"))
+	return m.mainPanelStyle().Height(height).MaxHeight(height).Width(width - 2).Render(strings.Join(lines, "\n"))
 }
 
 func (m model) podcastBrowserOptions() []string {
@@ -1890,6 +1997,9 @@ func (m model) renderSettingsDialog() string {
 		"API host",
 		"Default volume (0-100)",
 		"Refresh interval (minutes, min 5)",
+		"",
+		"",
+		"",
 	}
 	content := ui.CategoryStyle.Render(titles[m.settingsCursor]) + "\n\n" +
 		m.settingInput.View() + "\n" +

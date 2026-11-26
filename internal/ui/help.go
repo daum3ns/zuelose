@@ -7,12 +7,17 @@ func HelpText() string {
 	text := `
 Navigation
   ↑ / ↓        Move up / down in the focused pane
-  Tab          Cycle focus (sidebar → search → list)
+  Tab          Next pane
+  Shift+Tab    Previous pane
+  ← / →        Previous / next pane (when not typing)
   Enter        Activate selected item / play
   Esc          Back / cancel
 
 Playback
-  Space        Pause / resume
+  Space        Pause / resume (podcasts)
+  Space        Connect / disconnect (radio streams)
+  Shift+← / →  Seek ±10 s (podcasts)
+  Shift+↑ / ↓  Seek ±60 s (podcasts)
   + / -        Volume up / down
 
 Radio
@@ -41,7 +46,7 @@ Podcast Episodes
 
 Other
   ?            Toggle this help
-  Esc / Q      Back / quit
+  Q            Quit
 `
 	box := lipgloss.NewStyle().
 		Background(ColorSurface()).
