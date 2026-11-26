@@ -632,6 +632,31 @@ func TestActivateViewSetsFocus(t *testing.T) {
 	}
 }
 
+func TestActivateFavouritesSelectsFirstEntry(t *testing.T) {
+	m, _, _ := newTestModel(t)
+	m.favs = store.Favourites{Categories: []store.Category{
+		{
+			Name: "Music",
+			Stations: []store.FavStation{
+				{Station: store.Station{Name: "First"}},
+				{Station: store.Station{Name: "Second"}},
+			},
+		},
+	}}
+
+	// The shared radio cursor starts on the category header.
+	m.list.Cursor = 0
+	m = activate(m, viewRadioFavourites)
+
+	if m.list.Cursor != 1 {
+		t.Fatalf("expected first favourite at cursor 1, got %d", m.list.Cursor)
+	}
+	sel := m.list.Selected()
+	if sel == nil || sel.Name != "First" {
+		t.Fatalf("expected first favourite selected, got %+v", sel)
+	}
+}
+
 func TestSeekKeysSeekPodcast(t *testing.T) {
 	m, fp, _ := newTestModel(t)
 	m.status.Media = player.Media{Name: "Episode", URL: "http://ep", IsPodcast: true}

@@ -768,6 +768,7 @@ func (m model) activateView(v view) (tea.Model, tea.Cmd) {
 		m.blurAllInputs()
 		m.podcastPreviewFeed = nil
 		m.list.Items = m.buildFavItems()
+		m.list.SelectFirst()
 	case viewPodcastSubscriptions:
 		m.focus = focusList
 		m.blurAllInputs()
