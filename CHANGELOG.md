@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-27
+
 ### Added
 
 - Radio station search, favourites, and favourite categories.
@@ -22,3 +24,6 @@
 ### Security
 
 - Updated the Go toolchain and `golang.org/x/net` to versions addressing current vulnerability advisories.
+
+[Unreleased]: https://github.com/daum3ns/zuelose/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/daum3ns/zuelose/releases/tag/v0.1.0
