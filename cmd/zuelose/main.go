@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,9 +11,30 @@ import (
 	"github.com/daum3ns/zuelose/internal/player"
 	"github.com/daum3ns/zuelose/internal/radio"
 	"github.com/daum3ns/zuelose/internal/store"
+	"github.com/daum3ns/zuelose/internal/version"
 )
 
 func main() {
+	if handleVersionArgs(os.Args[1:], os.Stdout) {
+		return
+	}
+	run()
+}
+
+func handleVersionArgs(args []string, out io.Writer) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch args[0] {
+	case "version", "--version", "-version":
+		fmt.Fprintf(out, "zuelose version %s\n", version.String())
+		return true
+	default:
+		return false
+	}
+}
+
+func run() {
 	cfg, err := store.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not load config: %v\n", err)

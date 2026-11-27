@@ -10,5 +10,7 @@
 # Test artifacts
 coverage.out
 *.test
+__pycache__/
+*.py[cod]
 
 

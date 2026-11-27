@@ -1,0 +1,194 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate version tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag must be a stable semantic version such as v1.2.3 (got $TAG)."
+            exit 1
+          fi
+
+      - name: Test changelog extractor
+        run: python3 -m unittest scripts/test_changelog_release_notes.py
+
+      - name: Extract release notes from changelog
+        run: |
+          python3 scripts/changelog_release_notes.py \
+            "$GITHUB_REF_NAME" \
+            CHANGELOG.md \
+            "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Build all packages
+        run: go build ./...
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      - name: Verify native release version
+        shell: bash
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/daum3ns/zuelose/internal/version.Version=${GITHUB_REF_NAME}" \
+            -o ./zuelose ./cmd/zuelose
+          test "$(./zuelose version)" = "zuelose version ${GITHUB_REF_NAME}"
+
+  package:
+    name: Package ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and archive binary
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          ASSET_VERSION="${VERSION#v}"
+          mkdir -p dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/daum3ns/zuelose/internal/version.Version=${VERSION}" \
+            -o dist/zuelose ./cmd/zuelose
+          tar -czf "dist/zuelose_${ASSET_VERSION}_${GOOS}_${GOARCH}.tar.gz" -C dist zuelose
+          rm dist/zuelose
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: [verify, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Extract release notes from changelog
+        run: |
+          python3 scripts/changelog_release_notes.py \
+            "$GITHUB_REF_NAME" \
+            CHANGELOG.md \
+            "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Download release archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate and verify checksums
+        shell: bash
+        run: |
+          cd dist
+          shopt -s nullglob
+          archives=(zuelose_*.tar.gz)
+          if [[ ${#archives[@]} -ne 4 ]]; then
+            echo "::error::Expected four release archives, found ${#archives[@]}."
+            exit 1
+          fi
+          sha256sum "${archives[@]}" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          TITLE="Zuelose $TAG"
+          NOTES="$RUNNER_TEMP/release-notes.md"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" \
+              --title "$TITLE" \
+              --notes-file "$NOTES" \
+              --draft=false
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$TITLE" \
+              --notes-file "$NOTES" \
+              --draft
+            gh release upload "$TAG" dist/*
+            gh release edit "$TAG" --draft=false
+          fi

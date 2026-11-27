@@ -18,13 +18,54 @@ A minimalistic terminal radio and podcast player built with Go.
 
 ## Building from source
 
-- Go 1.26 or newer
+- Go 1.26.11 or newer
 - GNU Make
+- Python 3.10 or newer for changelog tooling tests
 
 ```bash
-make build   # creates the ./zuelose binary
-make test    # run the test suite
+make build   # creates the ./zuelose binary with version metadata
+make test    # run Go and changelog tooling tests
+make check   # build, test, and run go vet
 make clean   # remove the binary
+```
+
+### Install
+
+Install to `/usr/local/bin` by default:
+
+```bash
+sudo make install
+```
+
+For a user-local installation:
+
+```bash
+make install PREFIX="$HOME/.local"
+```
+
+`DESTDIR` is supported for staged package installs:
+
+```bash
+DESTDIR=/tmp/zuelose-package make install PREFIX=/usr/local
+```
+
+Remove an installed binary with:
+
+```bash
+make uninstall PREFIX="$HOME/.local"
+```
+
+### Version
+
+```bash
+./zuelose version
+./zuelose --version
+```
+
+Release builds are stamped with their Git tag. Local builds use `git describe` and fall back to `dev` when no version is available. A specific version can be supplied explicitly:
+
+```bash
+make build VERSION=v1.2.3
 ```
 
 ## Run
@@ -39,6 +80,45 @@ Or build and run in one shot (requires both Go and mpv):
 
 ```bash
 make run
+```
+
+## Releases
+
+Tag pushes matching `v*` trigger the release workflow. It builds, tests, runs `go vet` and `govulncheck`, then publishes archives for:
+
+- Linux amd64 and arm64
+- macOS amd64 and arm64
+
+Assets use the following naming scheme:
+
+```text
+zuelose_<version>_<os>_<arch>.tar.gz
+SHA256SUMS
+```
+
+Verify a downloaded archive before extracting it:
+
+```bash
+sha256sum -c SHA256SUMS       # Linux
+shasum -a 256 -c SHA256SUMS   # macOS
+```
+
+Release notes come from the matching version section in [CHANGELOG.md](CHANGELOG.md). Before tagging a release, move the relevant entries from `[Unreleased]` into a dated section such as `[1.2.3] - 2026-11-27`, then push the tag:
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+The release workflow fails if the tag is invalid or its changelog section is missing or empty.
+
+## Continuous integration
+
+GitHub Actions builds and tests every push and pull request. Pull requests also run `govulncheck`. To run the same vulnerability scan locally:
+
+```bash
+go install golang.org/x/vuln/cmd/govulncheck@latest
+make vulncheck
 ```
 
 ## Configuration
